@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>EmbiggenEye — Explorer</title>
+
+  <!-- App CSS -->
+  <link rel="stylesheet" href="styles.css">
+
+  <!-- Leaflet CSS (no integrity attribute to avoid SRI blocking) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+  <!-- MarkerCluster CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+
+  <!-- Icons (feather icons fallback) -->
+  <link rel="stylesheet" href="https://unpkg.com/feather-icons/dist/feather.min.css" />
+
+  <style>
+    /* Minimal safety: ensure map container is visible even if styles.css fails to load */
+    html,body { height: 100%; margin: 0; background: #0b0e16; }
+    #map { width: 100%; height: 100%; min-height: 480px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <img src="static/logo.png" alt="EmbiggenEye" class="logo" onerror="this.style.display='none'" />
+        <div class="title">
+          <div class="main">EmbiggenEye</div>
+          <div class="sub">Lunar crater water-likelihood explorer</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="search">
+          <input id="searchInput" placeholder="Search crater name or id..." aria-label="Search" />
+          <button id="searchBtn" class="btn ghost">Search</button>
+        </div>
+
+        <div class="actions">
+          <button id="suggestBtn" class="btn">Suggest</button>
+          <button id="exportBtn" class="btn ghost">Export</button>
+          <button id="helpBtn" class="btn ghost">Help</button>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <aside class="leftpanel card">
+        <div class="panel-section">
+          <h4>Layers</h4>
+          <div class="layers">
+            <label><input type="radio" name="layer" value="vis" checked> Visible</label>
+            <label><input type="radio" name="layer" value="ir" disabled> IR (add later)</label>
+            <label><input type="radio" name="layer" value="elev" disabled> Elevation (add later)</label>
+            <label><input type="radio" name="layer" value="index" disabled> Water-index (add later)</label>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <h4>Legend</h4>
+          <div class="legend">
+            <div class="legend-row"><span class="swatch low"></span> Low water_score</div>
+            <div class="legend-row"><span class="swatch mid"></span> Medium</div>
+            <div class="legend-row"><span class="swatch high"></span> High water_score</div>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <h4>Annotations</h4>
+          <div id="annotationsList">None yet</div>
+        </div>
+
+        <footer class="panel-footer">
+          <small>Demo-ready. Add IR/Elev/index tiles anytime — UI is flexible.</small>
+        </footer>
+      </aside>
+
+      <section id="mapContainer">
+        <div id="map"></div>
+      </section>
+
+      <aside class="rightpanel card">
+        <div id="featureDetails" class="feature-details">
+          <div class="empty">Click a crater to view details</div>
+        </div>
+      </aside>
+    </main>
+
+    <div id="toast" class="toast" aria-live="polite" role="status"></div>
+
+    <footer class="bottombar">
+      <div>EmbiggenEye • Demo build — GitHub Pages friendly</div>
+      <div class="small">Tip: use the Suggest button to reveal precomputed candidates</div>
+    </footer>
+  </div>
+
+  <!-- Leaflet and plugins (scripts loaded in correct order) -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+  <!-- Your app (must come after Leaflet) -->
+  <script src="app.js"></script>
+
+  <!-- Small noscript fallback -->
+  <noscript>
+    <div style="position:fixed;left:12px;bottom:12px;padding:8px;background:#fffa;backdrop-filter:blur(4px);border-radius:8px;">
+      JavaScript is required to view the map. Please enable JS and reload the page.
+    </div>
+  </noscript>
+</body>
+</html>

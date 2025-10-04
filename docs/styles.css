@@ -1,0 +1,257 @@
+/* styles.css — EmbiggenEye frontend */
+
+/* --- Root Theme --- */
+:root {
+  --color-bg: #0b0e16;
+  --color-surface: #151a24;
+  --color-panel: #1f2635;
+  --color-accent: #3ea6ff;
+  --color-accent-light: #66c2ff;
+  --color-text: #e9ecf2;
+  --color-muted: #98a1b3;
+  --color-highlight: #ff7a00;
+  --radius: 10px;
+  --shadow: 0 2px 8px rgba(0,0,0,0.3);
+  --transition: all 0.25s ease;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+#mapContainer, #map {
+  height: 100%;
+  width: 100%;
+}
+
+/* --- Topbar --- */
+.topbar {
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: var(--shadow);
+  z-index: 1000;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand .logo {
+  height: 40px;
+  width: 40px;
+}
+
+.brand .title .main {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--color-accent);
+}
+
+.brand .title .sub {
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.search input {
+  background: var(--color-panel);
+  color: var(--color-text);
+  border: 1px solid #2a3142;
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  width: 220px;
+  outline: none;
+}
+
+.search input:focus {
+  border-color: var(--color-accent);
+}
+
+.btn {
+  background: var(--color-accent);
+  color: #fff;
+  border: none;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-weight: 600;
+  transition: var(--transition);
+}
+
+.btn:hover {
+  background: var(--color-accent-light);
+}
+
+.btn.ghost {
+  background: transparent;
+  border: 1px solid var(--color-muted);
+  color: var(--color-text);
+}
+
+.btn.ghost:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.btn.small {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 260px 1fr 280px;
+  overflow: hidden;
+}
+
+.leftpanel, .rightpanel {
+  background: var(--color-panel);
+  color: var(--color-text);
+  padding: 12px;
+  box-shadow: var(--shadow);
+  overflow-y: auto;
+}
+
+.leftpanel {
+  border-right: 1px solid #222836;
+}
+
+.rightpanel {
+  border-left: 1px solid #222836;
+}
+
+.card {
+  border-radius: var(--radius);
+}
+
+.panel-section h4 {
+  margin: 6px 0;
+  color: var(--color-accent);
+}
+
+.layers label {
+  display: block;
+  margin: 4px 0;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+.swatch {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+}
+
+.swatch.low { background: #0066ff; }
+.swatch.mid { background: #ffff66; }
+.swatch.high { background: #ff3333; }
+
+.panel-footer {
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--color-muted);
+}
+
+.feature-details {
+  font-size: 14px;
+}
+
+.feature-details h3 {
+  margin: 4px 0;
+  color: var(--color-accent);
+}
+
+.feature-details .scores div {
+  margin-bottom: 4px;
+}
+
+.ann-row {
+  display: flex;
+  justify-content: space-between;
+  background: #2a3142;
+  padding: 4px 6px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+
+.ann-row .score {
+  color: var(--color-accent);
+}
+
+.bottombar {
+  background: var(--color-surface);
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--color-muted);
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+
+/* Toast message */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--color-accent);
+  color: white;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transform: translateY(20px);
+  transition: var(--transition);
+  z-index: 2000;
+}
+.toast.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Popup table */
+.popup-table td {
+  padding: 2px 6px;
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.popup-card h4 {
+  color: var(--color-accent);
+  margin: 0 0 4px 0;
+}
+
+/* Scrollbars */
+.leftpanel::-webkit-scrollbar, .rightpanel::-webkit-scrollbar {
+  width: 6px;
+}
+.leftpanel::-webkit-scrollbar-thumb, .rightpanel::-webkit-scrollbar-thumb {
+  background: #333b4e;
+  border-radius: 3px;
+}
+
