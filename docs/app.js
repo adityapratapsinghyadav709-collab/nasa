@@ -1,14 +1,13 @@
 // app.js — EmbiggenEye (robust, base-path aware, pixel/geo fallback)
-// Replace your existing app.js with this file.
+// Behavior preserved from your original file; fixes: more robust PAGE_BASE detection,
+// safer feature fetch fallback, clearer debug logs, small defensive guards.
 
 (() => {
   'use strict';
 
   // ---------- CONFIG ----------
-  // If you run server from different folders (project root /docs / tiles), the PAGE_BASE logic below
-  // will compute the correct prefix so tile URLs become '/tiles/...' or '/docs/tiles/...'.
-  // If your features.json uses pixel x/y instead of lat/lon, fill IMAGE_GEOTIFF below:
-  // IMAGE_GEOTIFF = {
+  // If your features.json uses pixel x/y instead of lat/lon, fill IMAGE_GEOTIFF like:
+  // const IMAGE_GEOTIFF = {
   //   minLon: <left lon>,
   //   maxLon: <right lon>,
   //   minLat: <bottom lat>,
@@ -16,12 +15,13 @@
   //   width: <image_pixel_width>,
   //   height: <image_pixel_height>
   // };
-  // Coordinates mapping assumes x,y origin is top-left pixel (x to the right, y down).
-  const IMAGE_GEOTIFF = null; // <-- set to object above if you have pixel coords and know bounds/size
+  // origin: top-left pixel (x -> right, y -> down)
+  const IMAGE_GEOTIFF = null; // <-- set to object above if needed
 
-  const DEBUG = true; // set true to log requested tile urls
+  // Toggle debug logs (tile requests, warnings). Set to false for production.
+  const DEBUG = true;
 
-  // Wait for DOMContentLoaded and Leaflet to be available
+  // ---------- tiny utility helpers ----------
   function whenReady() {
     return new Promise((resolve) => {
       if (document.readyState === 'loading') {
@@ -43,26 +43,26 @@
     });
   }
 
-  // Compute page base (works if the page is at / or /docs/ or /foo/bar/index.html).
+  // Compute page base so assets work whether site is served from / or /repo/ or /docs/
   function computePageBase() {
     let path = window.location.pathname || '/';
-    // if path has filename, strip to folder
+    // if there's a filename, strip to folder
     if (path.indexOf('.') !== -1) {
       path = path.substring(0, path.lastIndexOf('/') + 1);
     } else if (!path.endsWith('/')) {
       path = path + '/';
     }
-    // ensure starts with '/'
     if (!path.startsWith('/')) path = '/' + path;
-    // Normalize: avoid double slashes later by trimming trailing slashes except single '/'
-    if (path.length > 1 && path.endsWith('/')) path = path;
+    // keep trailing slash (do not collapse to empty)
     return path;
   }
 
-  // ---------- helpers ----------
   function toast(msg, timeout = 2800) {
     const t = document.getElementById('toast');
-    if (!t) return console.log('Toast:', msg);
+    if (!t) {
+      if (DEBUG) console.log('[toast]', msg);
+      return;
+    }
     t.textContent = msg;
     t.classList.add('visible');
     clearTimeout(t._timer);
@@ -90,15 +90,12 @@
     return Math.min(40, Math.max(6, 6 + Math.log10(km + 1) * 12));
   }
 
-  // Map pixel x,y -> lat/lon using IMAGE_GEOTIFF config
   function pixelToLatLon(x, y) {
     if (!IMAGE_GEOTIFF) {
       throw new Error('IMAGE_GEOTIFF not configured — cannot map pixel x,y to lat/lon');
     }
     const { minLon, maxLon, minLat, maxLat, width, height } = IMAGE_GEOTIFF;
-    // assume x [0..width], y [0..height], origin top-left
     const lon = minLon + (x / width) * (maxLon - minLon);
-    // y increases downward in pixel coords; lat decreases downward; so map accordingly
     const lat = maxLat - (y / height) * (maxLat - minLat);
     return [lat, lon];
   }
@@ -109,9 +106,8 @@
       await whenReady();
       await waitForLeaflet();
 
-      // compute base so tiles work with different server roots
-      const PAGE_BASE = computePageBase(); // e.g. '/' or '/docs/'
-      if (DEBUG) console.log('PAGE_BASE=', PAGE_BASE);
+      const PAGE_BASE = computePageBase();
+      if (DEBUG) console.log('[EMBIGGEN] PAGE_BASE =', PAGE_BASE);
 
       const TILE_PATHS = {
         vis: PAGE_BASE + 'tiles/layer_vis/{z}/{x}/{y}.png',
@@ -120,17 +116,16 @@
         index: PAGE_BASE + 'tiles/layer_index/{z}/{x}/{y}.png',
       };
 
-      // expose for debugging
+      // expose tiny debug object
       window.EMBIGGEN = window.EMBIGGEN || {};
       window.EMBIGGEN.PAGE_BASE = PAGE_BASE;
       window.EMBIGGEN.TILE_PATHS = TILE_PATHS;
 
-      // Map init (default view near lunar south pole for demo)
+      // init map (center near south pole for demo)
       const map = L.map('map', { preferCanvas: true }).setView([-89.6, -45.0], 2);
-      // expose map for console
       window.map = map;
 
-      // Optional debug tile wrapper - logs requested tile URLs (safe)
+      // debug tile layer builder — logs requested tile URLs when DEBUG true
       function debugTileLayer(urlTemplate, options = {}) {
         const tl = L.tileLayer(urlTemplate, options);
         if (!DEBUG) return tl;
@@ -138,7 +133,7 @@
         tl.createTile = function (coords, done) {
           const url = L.Util.template(this._url, coords);
           console.log('[tile-request]', url);
-          // HEAD-check (non-blocking)
+          // non-blocking HEAD check
           fetch(url, { method: 'HEAD' }).then(r => {
             if (!r.ok) console.warn('[tile HEAD]', r.status, url);
           }).catch(e => console.warn('[tile HEAD error]', e, url));
@@ -147,7 +142,6 @@
         return tl;
       }
 
-      // create tile layers
       const layerVis = debugTileLayer(TILE_PATHS.vis, { maxZoom: 5, tileSize: 256, noWrap: true });
       const layerIR = debugTileLayer(TILE_PATHS.ir, { maxZoom: 5, tileSize: 256, noWrap: true });
       const layerElev = debugTileLayer(TILE_PATHS.elev, { maxZoom: 5, tileSize: 256, noWrap: true });
@@ -155,25 +149,24 @@
 
       // add visible by default
       layerVis.addTo(map);
-
       L.control.layers({ 'Visible': layerVis }, {}, { collapsed: true }).addTo(map);
 
-      // cluster group
+      // marker cluster group
       const markerCluster = L.markerClusterGroup({ chunkedLoading: true });
       map.addLayer(markerCluster);
 
       // state
       let features = [];
       const featureMap = new Map();
-
-      // load features.json
       let featuresLoaded = false;
+
+      // Try loading features.json with PAGE_BASE then fallback to bare filename.
       try {
         features = await loadJSON(PAGE_BASE + 'features.json');
         featuresLoaded = true;
         toast(`Loaded ${features.length} features`);
       } catch (err) {
-        // try without PAGE_BASE (backward compatible)
+        if (DEBUG) console.warn('[EMBIGGEN] load with PAGE_BASE failed:', err.message);
         try {
           features = await loadJSON('features.json');
           featuresLoaded = true;
@@ -186,33 +179,28 @@
       }
 
       function getLatLonForFeature(f) {
-        // prefer lat/lon fields in feature
-        if (f.lat !== undefined && f.lon !== undefined) {
-          return [f.lat, f.lon];
-        }
-        // sometimes property names are 'latitude'/'longitude'
-        if (f.latitude !== undefined && f.longitude !== undefined) {
-          return [f.latitude, f.longitude];
-        }
-        // fallback to pixel x,y mapping if available
-        if ((f.x !== undefined && f.y !== undefined) || (f.pixel_x !== undefined && f.pixel_y !== undefined)) {
-          const x = f.x !== undefined ? +f.x : +f.pixel_x;
-          const y = f.y !== undefined ? +f.y : +f.pixel_y;
+        if (f.lat !== undefined && f.lon !== undefined) return [f.lat, f.lon];
+        if (f.latitude !== undefined && f.longitude !== undefined) return [f.latitude, f.longitude];
+        // support pixel coords: x,y or pixel_x,pixel_y
+        const hasXY = (f.x !== undefined && f.y !== undefined) || (f.pixel_x !== undefined && f.pixel_y !== undefined);
+        if (hasXY) {
+          const x = (f.x !== undefined) ? +f.x : +f.pixel_x;
+          const y = (f.y !== undefined) ? +f.y : +f.pixel_y;
           if (!IMAGE_GEOTIFF) {
-            // can't map pixel coords without IMAGE_GEOTIFF config
+            if (DEBUG) console.warn('Feature has pixel x/y but IMAGE_GEOTIFF not set; skipping feature', f);
             return null;
           }
           try {
             return pixelToLatLon(x, y);
           } catch (e) {
-            console.warn('pixel->latlon failed', e);
+            if (DEBUG) console.warn('pixelToLatLon failed', e);
             return null;
           }
         }
         return null;
       }
 
-      // Render features
+      // render features onto map & cluster
       function renderFeatures(list) {
         markerCluster.clearLayers();
         featureMap.clear();
@@ -220,8 +208,7 @@
         for (const f of list) {
           const latlon = getLatLonForFeature(f);
           if (!latlon) {
-            // skip or optionally log
-            if (DEBUG) console.warn('Skipping feature (no lat/lon and no IMAGE_GEOTIFF):', f);
+            if (DEBUG) console.warn('Skipping feature (no lat/lon):', f);
             continue;
           }
           const [lat, lon] = latlon;
@@ -248,6 +235,7 @@
             if (btn) btn.onclick = () => { addAnnotation(f); toast('Annotation saved'); e.popup._close(); };
             showFeatureDetails(f);
           });
+
           marker.on('click', () => showFeatureDetails(f));
 
           markerCluster.addLayer(marker);
@@ -266,7 +254,7 @@
 
       renderFeatures(features);
 
-      // UI wiring
+      // --- UI bindings ---
       const searchInput = document.getElementById('searchInput');
       const searchBtn = document.getElementById('searchBtn');
       const suggestBtn = document.getElementById('suggestBtn');
@@ -288,14 +276,13 @@
       if (searchBtn) searchBtn.addEventListener('click', doSearch);
       if (searchInput) searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
 
-      // Suggestions (try suggestions.json, else top features)
+      // Suggestions loader (PAGE_BASE aware)
       async function loadSuggestionsOrTopN(n = 10) {
         try {
-          const s = await loadJSON(PAGE_BASE + 'suggestions.json');
-          return s;
+          return await loadJSON(PAGE_BASE + 'suggestions.json');
         } catch (e) {
-          try { const s2 = await loadJSON('suggestions.json'); return s2; } catch (_) {
-            // fallback: top N from features by water_score
+          if (DEBUG) console.warn('suggestions with PAGE_BASE failed:', e.message);
+          try { return await loadJSON('suggestions.json'); } catch (_) {
             return features.slice().sort((a, b) => (b.water_score || 0) - (a.water_score || 0)).slice(0, n);
           }
         }
