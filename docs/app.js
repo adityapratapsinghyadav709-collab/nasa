@@ -135,66 +135,110 @@ function initTileLayer(tilesAvailable){
 }
 
 // Robust loadPSR(): tries multiple candidate paths and logs helpful diagnostics.
+// Robust loadPSR() — replaces previous simpler loader
 async function loadPSR(){
   const candidates = [
-    './static/psr.geojson',      // expected in docs/static/
-    'static/psr.geojson',
-    './psr.geojson',
-    './docs/static/psr.geojson', // sometimes used when previewing locally
-    '/static/psr.geojson',
-    '/psr.geojson'
+    './static/psr.geojson', 'static/psr.geojson', './psr.geojson', './docs/static/psr.geojson',
+    '/static/psr.geojson', '/psr.geojson'
   ];
-
-  // If site is on GitHub Pages it may be under a repo path — try to detect base
+  // try to use <base> if present
   try {
     const base = document.querySelector('base') ? document.querySelector('base').href : (location.pathname || '/');
-    // construct a candidate under base
-    if (base && base.length) {
+    if(base && base.length){
       const baseTry = base.endsWith('/') ? base + 'static/psr.geojson' : base + '/static/psr.geojson';
       candidates.push(baseTry);
     }
   } catch(e){ /* ignore */ }
 
   let lastErr = null;
-  for (const url of candidates){
+  for(const url of candidates){
     try {
       console.log('[PSR] trying', url);
       const resp = await fetch(url, { cache: 'no-store' });
-      if (!resp.ok) {
+      if(!resp.ok){
+        console.warn('[PSR] failed', url, 'HTTP', resp.status);
         lastErr = `HTTP ${resp.status} for ${url}`;
-        console.warn('[PSR] failed', lastErr);
         continue;
       }
       const json = await resp.json();
-      // basic sanity check: must have features array
-      if (!json || !json.features || !Array.isArray(json.features) || json.features.length === 0) {
-        // Could be valid but empty — still accept but warn
+      console.log('[PSR] fetched — top-level keys:', Object.keys(json));
+
+      // If it's already a valid FeatureCollection with features
+      if(json && json.type === 'FeatureCollection' && Array.isArray(json.features) && json.features.length){
         PSR_GEOJSON = json;
-        if (!json.features || !json.features.length) console.warn('[PSR] loaded but empty features array:', url);
-        else console.log('[PSR] loaded', url);
-        if (PSR_GEOJSON) L.geoJSON(PSR_GEOJSON, { style: { color:'#7fd', weight:1, fillOpacity:0.06 } }).addTo(map);
+        L.geoJSON(PSR_GEOJSON, { style:{ color:'#7fd', weight:1, fillOpacity:0.06 } }).addTo(map);
+        console.log('[PSR] FeatureCollection loaded (features count):', json.features.length, 'from', url);
         return;
       }
+
+      // If it is FeatureCollection but features is empty — warn but try to salvage
+      if(json && json.type === 'FeatureCollection' && Array.isArray(json.features) && json.features.length === 0){
+        console.warn('[PSR] FeatureCollection present but features array is empty:', url);
+        // fall through to try to find geometry-like objects inside
+      }
+
+      // If the file is a single Feature (with geometry) - wrap into FeatureCollection
+      if(json && json.type === 'Feature' && json.geometry){
+        PSR_GEOJSON = { type: 'FeatureCollection', features: [json] };
+        L.geoJSON(PSR_GEOJSON, { style:{ color:'#7fd', weight:1, fillOpacity:0.06 } }).addTo(map);
+        console.log('[PSR] single Feature wrapped into FeatureCollection from', url);
+        return;
+      }
+
+      // If top-level is a geometry (Polygon, MultiPolygon, GeometryCollection) — wrap it
+      if(json && json.type && (json.type === 'Polygon' || json.type === 'MultiPolygon' || json.type === 'GeometryCollection') && json.coordinates){
+        const feat = { type:'Feature', properties:{}, geometry: { type: json.type, coordinates: json.coordinates } };
+        PSR_GEOJSON = { type:'FeatureCollection', features:[feat] };
+        L.geoJSON(PSR_GEOJSON, { style:{ color:'#7fd', weight:1, fillOpacity:0.06 } }).addTo(map);
+        console.log('[PSR] top-level geometry wrapped into FeatureCollection from', url);
+        return;
+      }
+
+      // Try some heuristics: search for any array-like geometry structures deeper in the JSON
+      // This handles some non-standard files where polygons are nested in other keys.
+      function findPolygons(obj){
+        const found = [];
+        (function walk(o){
+          if(!o || typeof o !== 'object') return;
+          if(o.type && (o.type === 'Polygon' || o.type === 'MultiPolygon') && o.coordinates) { found.push({ type:o.type, coordinates:o.coordinates }); return; }
+          // array of coordinate pairs or nested arrays
+          if(Array.isArray(o) && o.length && Array.isArray(o[0]) && typeof o[0][0] === 'number'){ // likely coords
+            // assume polygon ring
+            found.push({ type:'Polygon', coordinates:[o] }); return;
+          }
+          for(const k of Object.keys(o)) walk(o[k]);
+        })(obj);
+        return found;
+      }
+      const polys = findPolygons(json);
+      if(polys.length){
+        const feats = polys.map(p => ({ type:'Feature', properties:{}, geometry:p }));
+        PSR_GEOJSON = { type:'FeatureCollection', features: feats };
+        L.geoJSON(PSR_GEOJSON, { style:{ color:'#7fd', weight:1, fillOpacity:0.06 } }).addTo(map);
+        console.log('[PSR] discovered and loaded', feats.length, 'polygon(s) from', url);
+        return;
+      }
+
+      // If we reach here we loaded JSON but couldn't find polygons in common places
+      console.warn('[PSR] JSON loaded but no usable geometry found at', url, '. Top-level keys:', Object.keys(json));
+      // still set PSR_GEOJSON = json so other heuristics may later inspect it
       PSR_GEOJSON = json;
-      // add to map
-      try { L.geoJSON(PSR_GEOJSON, { style: { color:'#7fd', weight:1, fillOpacity:0.06 } }).addTo(map); } catch(e){ console.warn('[PSR] geoJSON add failed', e); }
-      console.log('[PSR] loaded successfully from', url);
+      toast('PSR loaded but no polygons found (see console).');
       return;
-    } catch (err) {
+    } catch(err){
       lastErr = err;
       console.warn('[PSR] fetch error for', url, err);
-      // If fetch was blocked due to file:// origin or CORS, note it
-      if (err && err.name === 'TypeError' && location.protocol === 'file:') {
-        console.warn('[PSR] likely blocked by browser when using file:// — serve files over http using a local server.');
+      if(err && err.name === 'TypeError' && location.protocol === 'file:'){
+        console.warn('[PSR] fetch blocked by file:// origin — serve over http (python -m http.server).');
       }
     }
   }
 
-  // If we reach here, none of the candidates loaded
   PSR_GEOJSON = null;
   console.error('[PSR] all attempts failed. Last error:', lastErr);
   toast('PSR file not loaded — check network/paths (see console).');
 }
+
 
 /* --------------- Feature load & index --------------- */
 async function loadFeatureParts(parts){
@@ -625,4 +669,5 @@ function scoreToColor(s){
 }
 
 /* End of file */
+
 
