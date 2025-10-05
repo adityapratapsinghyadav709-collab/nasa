@@ -7,36 +7,60 @@
 
   <!-- App CSS -->
   <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
+  <!-- Leaflet + MarkerCluster CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
-  <link rel="stylesheet" href="https://unpkg.com/feather-icons/dist/feather.min.css" />
 
   <style>
-    /* Minimal safety: ensure map container is visible even if styles.css fails to load */
-    html,body { height: 100%; margin: 0; background: #0b0e16; }
-    #map { width: 100%; height: 100%; min-height: 480px; }
+    /* Minimal inline safety styles so page stays usable if external CSS fails */
+    :root{--bg:#071426;--panel:#0b1726;--muted:#9fb;--accent:#1f6feb;--card-grad:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));}
+    html,body{height:100%;margin:0;background:var(--bg);color:#dbe9ff;font-family:Inter,ui-sans-serif,system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial}
+    .topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:linear-gradient(90deg,#041029,#061529);color:#fff}
+    .brand{display:flex;gap:12px;align-items:center}
+    .logo{height:44px;width:44px;border-radius:8px;object-fit:cover}
+    main{display:grid;grid-template-columns:300px 1fr 340px;gap:12px;padding:12px;box-sizing:border-box;height:calc(100% - 118px)}
+    #map{width:100%;height:100%;border-radius:10px;overflow:hidden;box-shadow:0 6px 20px rgba(2,6,23,0.6)}
+    .card{background:var(--card-grad);border-radius:10px;padding:12px;color:#dbe9ff}
+    .leftpanel,.rightpanel{overflow:auto}
+    h4{margin:0 0 8px 0;font-size:15px}
+    .btn{background:var(--accent);color:#fff;border:none;padding:8px 10px;border-radius:8px;cursor:pointer;font-weight:600}
+    .btn.ghost{background:transparent;border:1px solid rgba(255,255,255,0.06);color:#cfe4ff}
+    .search input{padding:8px 10px;border-radius:8px;border:none;background:rgba(255,255,255,0.03);color:#e8f4ff;min-width:200px}
+    .layers label{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:14px;color:#cfe4ff}
+    .legend-row{margin:6px 0;color:#cfe4ff;font-size:13px}
+    .swatch{display:inline-block;width:18px;height:12px;margin-right:8px;vertical-align:middle}
+    .panel-footer{margin-top:12px;color:var(--muted);font-size:12px}
+    #toast{position:fixed;right:12px;top:86px;padding:10px 14px;background:rgba(0,0,0,0.65);color:#fff;border-radius:10px;z-index:2000;display:none}
+    #toast.visible{display:block;animation:fadein .16s ease-out}
+    @keyframes fadein{from{transform:translateY(-6px);opacity:0}to{transform:translateY(0);opacity:1}}
+    #loader{position:fixed;left:12px;top:76px;padding:8px 12px;background:rgba(0,0,0,0.6);color:#fff;border-radius:8px;z-index:2000;display:none}
+    .popup-card h4{margin:0 0 6px 0}
+    .popup-table td{padding:2px 6px}
+    .feature-details .empty{color:#9fb}
+    .muted{color:#9fb;font-size:13px}
+    /* responsive tweaks */
+    @media (max-width: 980px){ main{grid-template-columns:1fr} .rightpanel{display:none} }
   </style>
 </head>
 <body>
   <div id="app">
     <header class="topbar">
       <div class="brand">
-        <img src="static/logo.png" alt="EmbiggenEye" class="logo" onerror="this.style.display='none'" />
-        <div class="title">
-          <div class="main">EmbiggenEye</div>
-          <div class="sub">Lunar crater water-likelihood explorer</div>
+        <img src="static/logo.png" alt="EmbiggenEye" class="logo" onerror="this.style.display='none'"/>
+        <div>
+          <div style="font-weight:700;font-size:18px">EmbiggenEye</div>
+          <div style="font-size:12px;color:#9fb">Lunar crater water-likelihood explorer — Demo</div>
         </div>
       </div>
 
-      <div class="controls">
-        <div class="search">
-          <input id="searchInput" placeholder="Search crater name or id..." aria-label="Search" />
+      <div style="display:flex;gap:8px;align-items:center">
+        <div class="search" style="display:flex;gap:8px;align-items:center">
+          <input id="searchInput" placeholder="Search crater name or id..." aria-label="Search crater" />
           <button id="searchBtn" class="btn ghost">Search</button>
         </div>
-
-        <div class="actions">
+        <div style="display:flex;gap:8px;align-items:center;margin-left:8px">
           <button id="suggestBtn" class="btn">Suggest</button>
           <button id="exportBtn" class="btn ghost">Export</button>
           <button id="helpBtn" class="btn ghost">Help</button>
@@ -46,33 +70,33 @@
 
     <main>
       <aside class="leftpanel card">
-        <div class="panel-section">
+        <div>
           <h4>Layers</h4>
           <div class="layers">
-            <label><input type="radio" name="layer" value="vis" checked> Visible</label>
-            <label><input type="radio" name="layer" value="ir" disabled> IR (add later)</label>
-            <label><input type="radio" name="layer" value="elev" disabled> Elevation (add later)</label>
-            <label><input type="radio" name="layer" value="index" disabled> Water-index (add later)</label>
+            <label><input type="radio" name="layer" value="vis" checked> Visible (base)</label>
+            <label><input type="radio" name="layer" value="ir" disabled> IR (add tiles)</label>
+            <label><input type="radio" name="layer" value="elev" disabled> Elevation (add tiles)</label>
+            <label><input type="radio" name="layer" value="index" disabled> Water-index (add tiles)</label>
           </div>
         </div>
 
-        <div class="panel-section">
+        <div style="margin-top:12px">
           <h4>Legend</h4>
           <div class="legend">
-            <div class="legend-row"><span class="swatch low"></span> Low water_score</div>
-            <div class="legend-row"><span class="swatch mid"></span> Medium</div>
-            <div class="legend-row"><span class="swatch high"></span> High water_score</div>
+            <div class="legend-row"><span class="swatch" style="background:#2b6cff"></span> Low water_score</div>
+            <div class="legend-row"><span class="swatch" style="background:#ffd166"></span> Medium</div>
+            <div class="legend-row"><span class="swatch" style="background:#ff6b6b"></span> High water_score</div>
           </div>
         </div>
 
-        <div class="panel-section">
+        <div style="margin-top:12px">
           <h4>Annotations</h4>
-          <div id="annotationsList">None yet</div>
+          <div id="annotationsList" class="muted">None yet</div>
         </div>
 
-        <footer class="panel-footer">
-          <small>Demo-ready. Add IR/Elev/index tiles anytime — UI is flexible.</small>
-        </footer>
+        <div style="margin-top:12px" class="panel-footer">
+          <div class="muted">Demo tips: Click a crater marker to highlight it, view breakdown and accept as an annotation. Use Export to save .geojson.</div>
+        </div>
       </aside>
 
       <section id="mapContainer">
@@ -80,32 +104,24 @@
       </section>
 
       <aside class="rightpanel card">
-        <div id="featureDetails" class="feature-details">
-          <div class="empty">Click a crater to view details</div>
-        </div>
+        <div id="featureDetails" class="feature-details"><div class="empty">Click a crater to view details</div></div>
       </aside>
     </main>
 
-    <div id="toast" class="toast" aria-live="polite" role="status"></div>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <div id="loader">Loading features…</div>
 
-    <footer class="bottombar">
-      <div>EmbiggenEye • Demo build — GitHub Pages friendly</div>
-      <div class="small">Tip: use the Suggest button to reveal precomputed candidates</div>
+    <footer style="padding:10px 16px;background:linear-gradient(90deg,#02131f,#041524);color:#9fb;display:flex;justify-content:space-between;align-items:center">
+      <div>EmbiggenEye • NASA Space Apps 2025 — Demo</div>
+      <div class="muted">Zoom levels: 0 to 5 (5-level demo)</div>
     </footer>
   </div>
 
-  <!-- Leaflet and plugins (scripts loaded in correct order) -->
+  <!-- Leaflet and plugins -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 
-  <!-- Your app (must come after Leaflet) -->
+  <!-- App logic (app.js) -->
   <script src="app.js"></script>
-
-  <!-- Small noscript fallback -->
-  <noscript>
-    <div style="position:fixed;left:12px;bottom:12px;padding:8px;background:#fffa;backdrop-filter:blur(4px);border-radius:8px;">
-      JavaScript is required to view the map. Please enable JS and reload the page.
-    </div>
-  </noscript>
 </body>
 </html>
