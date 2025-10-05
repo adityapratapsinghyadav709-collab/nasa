@@ -134,16 +134,66 @@ function initTileLayer(tilesAvailable){
   }
 }
 
-/* --------------- PSR load --------------- */
+// Robust loadPSR(): tries multiple candidate paths and logs helpful diagnostics.
 async function loadPSR(){
+  const candidates = [
+    './static/psr.geojson',      // expected in docs/static/
+    'static/psr.geojson',
+    './psr.geojson',
+    './docs/static/psr.geojson', // sometimes used when previewing locally
+    '/static/psr.geojson',
+    '/psr.geojson'
+  ];
+
+  // If site is on GitHub Pages it may be under a repo path — try to detect base
   try {
-    PSR_GEOJSON = await safeJsonFetch(CONFIG.PSR_URL);
-    L.geoJSON(PSR_GEOJSON, { style: { color:'#7fd', weight:1, fillOpacity:0.06 } }).addTo(map);
-    console.log('PSR loaded');
-  } catch(e) {
-    PSR_GEOJSON = null;
-    console.warn('PSR not loaded', e);
+    const base = document.querySelector('base') ? document.querySelector('base').href : (location.pathname || '/');
+    // construct a candidate under base
+    if (base && base.length) {
+      const baseTry = base.endsWith('/') ? base + 'static/psr.geojson' : base + '/static/psr.geojson';
+      candidates.push(baseTry);
+    }
+  } catch(e){ /* ignore */ }
+
+  let lastErr = null;
+  for (const url of candidates){
+    try {
+      console.log('[PSR] trying', url);
+      const resp = await fetch(url, { cache: 'no-store' });
+      if (!resp.ok) {
+        lastErr = `HTTP ${resp.status} for ${url}`;
+        console.warn('[PSR] failed', lastErr);
+        continue;
+      }
+      const json = await resp.json();
+      // basic sanity check: must have features array
+      if (!json || !json.features || !Array.isArray(json.features) || json.features.length === 0) {
+        // Could be valid but empty — still accept but warn
+        PSR_GEOJSON = json;
+        if (!json.features || !json.features.length) console.warn('[PSR] loaded but empty features array:', url);
+        else console.log('[PSR] loaded', url);
+        if (PSR_GEOJSON) L.geoJSON(PSR_GEOJSON, { style: { color:'#7fd', weight:1, fillOpacity:0.06 } }).addTo(map);
+        return;
+      }
+      PSR_GEOJSON = json;
+      // add to map
+      try { L.geoJSON(PSR_GEOJSON, { style: { color:'#7fd', weight:1, fillOpacity:0.06 } }).addTo(map); } catch(e){ console.warn('[PSR] geoJSON add failed', e); }
+      console.log('[PSR] loaded successfully from', url);
+      return;
+    } catch (err) {
+      lastErr = err;
+      console.warn('[PSR] fetch error for', url, err);
+      // If fetch was blocked due to file:// origin or CORS, note it
+      if (err && err.name === 'TypeError' && location.protocol === 'file:') {
+        console.warn('[PSR] likely blocked by browser when using file:// — serve files over http using a local server.');
+      }
+    }
   }
+
+  // If we reach here, none of the candidates loaded
+  PSR_GEOJSON = null;
+  console.error('[PSR] all attempts failed. Last error:', lastErr);
+  toast('PSR file not loaded — check network/paths (see console).');
 }
 
 /* --------------- Feature load & index --------------- */
@@ -575,3 +625,4 @@ function scoreToColor(s){
 }
 
 /* End of file */
+
