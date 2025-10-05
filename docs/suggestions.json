@@ -1,1 +1,1006 @@
-
+{
+  "generated_from": "C:\\Users\\sm\\Mars_Embigen\\docs\\scripts\\lunar_crater_database_robbins_2018.csv",
+  "count": 50,
+  "suggestions": [
+    {
+      "id": "00-1-000018",
+      "name": "00-1-000018",
+      "lon": 86.11649999999997,
+      "lat": -1.39324,
+      "diameter_m": 954724.0,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "00-1-000028",
+      "name": "00-1-000028",
+      "lon": 52.85789999999997,
+      "lat": -2.52891,
+      "diameter_m": 652877.0,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "00-1-000030",
+      "name": "00-1-000030",
+      "lon": 34.76319999999998,
+      "lat": -15.8284,
+      "diameter_m": 871995.0,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "00-1-000032",
+      "name": "00-1-000032",
+      "lon": 23.568499999999972,
+      "lat": -51.6705,
+      "diameter_m": 444257.0,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "05-1-050062",
+      "name": "05-1-050062",
+      "lon": 0.0036544499999990876,
+      "lat": -21.2383,
+      "diameter_m": 2700.5699999999997,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "05-1-055169",
+      "name": "05-1-055169",
+      "lon": 0.0019087900000158697,
+      "lat": -23.3627,
+      "diameter_m": 1438.26,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "05-1-063188",
+      "name": "05-1-063188",
+      "lon": 0.003844449999974131,
+      "lat": -29.5828,
+      "diameter_m": 1316.68,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "05-1-072769",
+      "name": "05-1-072769",
+      "lon": 0.004367460000025858,
+      "lat": -33.6671,
+      "diameter_m": 2254.9,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "05-3-034310",
+      "name": "05-3-034310",
+      "lon": 22.947000000000003,
+      "lat": -46.8863,
+      "diameter_m": 17498.5,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "06-2-000300",
+      "name": "06-2-000300",
+      "lon": 14.703399999999988,
+      "lat": -0.0128334,
+      "diameter_m": 8444.93,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "06-2-000857",
+      "name": "06-2-000857",
+      "lon": 77.60199999999998,
+      "lat": -0.0237813,
+      "diameter_m": 4820.7300000000005,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "06-2-001005",
+      "name": "06-2-001005",
+      "lon": 84.31079999999997,
+      "lat": -0.000795059,
+      "diameter_m": 2102.15,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "06-2-021071",
+      "name": "06-2-021071",
+      "lon": 4.902679999999975,
+      "lat": -0.0156829,
+      "diameter_m": 45889.1,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "06-3-044010",
+      "name": "06-3-044010",
+      "lon": 81.70170000000002,
+      "lat": -0.00456662,
+      "diameter_m": 1601.48,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000000",
+      "name": "07-1-000000",
+      "lon": 0.22849200000001701,
+      "lat": -4.3375,
+      "diameter_m": 15207.0,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000001",
+      "name": "07-1-000001",
+      "lon": 0.7302799999999934,
+      "lat": -2.45515,
+      "diameter_m": 50954.0,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000002",
+      "name": "07-1-000002",
+      "lon": 5.8566000000000145,
+      "lat": -3.99639,
+      "diameter_m": 29421.199999999997,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000003",
+      "name": "07-1-000003",
+      "lon": 8.726440000000025,
+      "lat": -4.26151,
+      "diameter_m": 44837.299999999996,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000004",
+      "name": "07-1-000004",
+      "lon": 7.403250000000014,
+      "lat": -5.03089,
+      "diameter_m": 13964.7,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000005",
+      "name": "07-1-000005",
+      "lon": 7.726920000000007,
+      "lat": -5.08448,
+      "diameter_m": 5494.99,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000006",
+      "name": "07-1-000006",
+      "lon": 6.990670000000023,
+      "lat": -2.87764,
+      "diameter_m": 15343.8,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000007",
+      "name": "07-1-000007",
+      "lon": 8.232349999999997,
+      "lat": -1.24701,
+      "diameter_m": 26299.0,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000008",
+      "name": "07-1-000008",
+      "lon": 10.035000000000025,
+      "lat": -1.30575,
+      "diameter_m": 53510.0,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000009",
+      "name": "07-1-000009",
+      "lon": 8.913090000000011,
+      "lat": -1.0278,
+      "diameter_m": 15354.1,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000010",
+      "name": "07-1-000010",
+      "lon": 9.37648999999999,
+      "lat": -1.1027,
+      "diameter_m": 11507.199999999999,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000011",
+      "name": "07-1-000011",
+      "lon": 2.0496899999999982,
+      "lat": -7.66035,
+      "diameter_m": 22222.8,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000012",
+      "name": "07-1-000012",
+      "lon": 3.201059999999984,
+      "lat": -7.5912,
+      "diameter_m": 13909.599999999999,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000013",
+      "name": "07-1-000013",
+      "lon": 2.4126699999999914,
+      "lat": -7.89024,
+      "diameter_m": 9895.18,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000014",
+      "name": "07-1-000014",
+      "lon": 0.26600799999999936,
+      "lat": -5.30819,
+      "diameter_m": 46187.5,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000015",
+      "name": "07-1-000015",
+      "lon": 4.915180000000021,
+      "lat": -5.76348,
+      "diameter_m": 18506.8,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000016",
+      "name": "07-1-000016",
+      "lon": 5.573950000000025,
+      "lat": -6.9165,
+      "diameter_m": 10897.6,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000017",
+      "name": "07-1-000017",
+      "lon": 5.025019999999984,
+      "lat": -5.38837,
+      "diameter_m": 146681.0,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000018",
+      "name": "07-1-000018",
+      "lon": 3.788409999999999,
+      "lat": -4.70872,
+      "diameter_m": 26975.899999999998,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000019",
+      "name": "07-1-000019",
+      "lon": 1.836059999999975,
+      "lat": -5.34734,
+      "diameter_m": 48912.6,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000020",
+      "name": "07-1-000020",
+      "lon": 5.742230000000006,
+      "lat": -8.02361,
+      "diameter_m": 33569.5,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000021",
+      "name": "07-1-000021",
+      "lon": 7.305790000000002,
+      "lat": -7.91836,
+      "diameter_m": 27227.6,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000022",
+      "name": "07-1-000022",
+      "lon": 8.209639999999979,
+      "lat": -7.4087,
+      "diameter_m": 16439.399999999998,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000023",
+      "name": "07-1-000023",
+      "lon": 3.0552900000000136,
+      "lat": -0.110772,
+      "diameter_m": 12584.9,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000024",
+      "name": "07-1-000024",
+      "lon": 3.5496899999999982,
+      "lat": -0.881315,
+      "diameter_m": 8826.49,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000025",
+      "name": "07-1-000025",
+      "lon": 13.032100000000014,
+      "lat": -7.01031,
+      "diameter_m": 30767.399999999998,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000026",
+      "name": "07-1-000026",
+      "lon": 13.845900000000029,
+      "lat": -7.70759,
+      "diameter_m": 35784.2,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000027",
+      "name": "07-1-000027",
+      "lon": 15.37700000000001,
+      "lat": -4.22047,
+      "diameter_m": 37902.1,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000028",
+      "name": "07-1-000028",
+      "lon": 14.367399999999975,
+      "lat": -3.66995,
+      "diameter_m": 13081.5,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000029",
+      "name": "07-1-000029",
+      "lon": 16.66289999999998,
+      "lat": -5.27549,
+      "diameter_m": 35634.3,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000030",
+      "name": "07-1-000030",
+      "lon": 17.112000000000023,
+      "lat": -6.0748,
+      "diameter_m": 11957.9,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000031",
+      "name": "07-1-000031",
+      "lon": 18.088799999999992,
+      "lat": -6.12969,
+      "diameter_m": 10359.199999999999,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000032",
+      "name": "07-1-000032",
+      "lon": 14.612900000000025,
+      "lat": -3.17419,
+      "diameter_m": 23468.5,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000033",
+      "name": "07-1-000033",
+      "lon": 15.801699999999983,
+      "lat": -2.41068,
+      "diameter_m": 17828.2,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000034",
+      "name": "07-1-000034",
+      "lon": 15.42610000000002,
+      "lat": -0.815845,
+      "diameter_m": 17841.8,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    },
+    {
+      "id": "07-1-000035",
+      "name": "07-1-000035",
+      "lon": 13.666499999999985,
+      "lat": -0.851487,
+      "diameter_m": 16912.4,
+      "water_score": 0.0,
+      "components": {
+        "psr": 0.0,
+        "hydro": null,
+        "spec": null,
+        "depth": null
+      },
+      "source_props": {
+        "psr_overlap": false,
+        "spectral_mean": null,
+        "hydrogen_mean": null,
+        "depth_metric": null
+      }
+    }
+  ]
+}
