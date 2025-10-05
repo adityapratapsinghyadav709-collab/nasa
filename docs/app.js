@@ -431,87 +431,145 @@ async function loadSuggestions(){
   }
 }
 /* ------------------- Suggestion Display ------------------- */
+/* ------------------- Robust Suggestion Display (replace old showSuggestions) ------------------- */
 function showSuggestions() {
-  if (!suggestions || !suggestions.length) {
+  // Find suggestions from possible globals (be tolerant)
+  const sourceList = (typeof SUGGESTIONS !== 'undefined' && Array.isArray(SUGGESTIONS) && SUGGESTIONS.length) ? SUGGESTIONS :
+                     (typeof suggestions !== 'undefined' && Array.isArray(suggestions) && suggestions.length) ? suggestions :
+                     (window.loadedSuggestions && Array.isArray(window.loadedSuggestions) && window.loadedSuggestions.length) ? window.loadedSuggestions :
+                     null;
+
+  if (!sourceList || !sourceList.length) {
+    console.warn('showSuggestions: no suggestions array found in SUGGESTIONS/suggestions/window.loadedSuggestions');
     toast("No suggestions available");
     return;
   }
 
-  // Remove any existing suggestion layers
+  // remove old suggestion layer if present
   if (window.suggestionLayerGroup) {
-    map.removeLayer(window.suggestionLayerGroup);
+    try { map.removeLayer(window.suggestionLayerGroup); } catch(e) {}
+    window.suggestionLayerGroup = null;
   }
+  // ensure a suggestionsLayer (non-cluster) exists for direct toggling if desired
+  if (typeof suggestionsLayer === 'undefined' || suggestionsLayer === null) suggestionsLayer = L.layerGroup().addTo(map);
 
+  // single marker cluster for suggestions
   const clusterGroup = L.markerClusterGroup({
     showCoverageOnHover: false,
     spiderfyOnMaxZoom: true,
-    maxClusterRadius: 40
+    maxClusterRadius: 40,
+    chunkedLoading: true
   });
 
-  // For each suggestion in suggestions.json
-  suggestions.forEach(s => {
-    const lat = s.lat, lon = s.lon;
-    if (isNaN(lat) || isNaN(lon)) return;
+  // insert one pulse style if not present
+  if (!document.getElementById('suggestion-pulse-style')) {
+    const pulse = document.createElement('style');
+    pulse.id = 'suggestion-pulse-style';
+    pulse.textContent = `
+      .leaflet-interactive.suggestion-marker {
+        animation: pulse-suggest 1.6s infinite;
+      }
+      @keyframes pulse-suggest {
+        0% { stroke-width: 1px; opacity: 1; transform: scale(1); }
+        50% { stroke-width: 3px; opacity: 0.45; transform: scale(1.25); }
+        100% { stroke-width: 1px; opacity: 1; transform: scale(1); }
+      }`;
+    document.head.appendChild(pulse);
+  }
+
+  let shown = 0, skipped = 0;
+  const skippedReasons = [];
+
+  sourceList.forEach((s, idx) => {
+    // tolerant lat/lon extraction
+    const latRaw = (s.lat !== undefined ? s.lat : (s.latitude !== undefined ? s.latitude : (s.LAT !== undefined ? s.LAT : (s.Lat !== undefined ? s.Lat : null))));
+    const lonRaw = (s.lon !== undefined ? s.lon : (s.longitude !== undefined ? s.longitude : (s.LON !== undefined ? s.LON : (s.Lon !== undefined ? s.Lon : null))));
+
+    // parse numbers (some JSON fields may be strings)
+    const lat = (latRaw === null || latRaw === undefined || latRaw === '') ? NaN : Number(latRaw);
+    const lon = (lonRaw === null || lonRaw === undefined || lonRaw === '') ? NaN : Number(lonRaw);
+
+    if (isNaN(lat) || isNaN(lon)) {
+      skipped++;
+      skippedReasons.push({ idx, id: s.id || s.name || null, reason: 'invalid-latlon', latRaw, lonRaw });
+      return;
+    }
+
+    // create safe id for DOM elements
+    const safeId = encodeURIComponent(String(s.id || s.name || `sugg_${idx}`));
 
     // Circle marker style for suggestions
     const marker = L.circleMarker([lat, lon], {
-      radius: 6,
+      radius: 8,
       color: "#FFA500",
       fillColor: "#FFA500",
-      fillOpacity: 0.7,
-      weight: 1,
+      fillOpacity: 0.65,
+      weight: 1.4,
       className: "suggestion-marker"
     });
 
-    // Smooth pulsing animation
-    const pulse = document.createElement("style");
-    pulse.textContent = `
-      .leaflet-interactive.suggestion-marker {
-        animation: pulse-suggest 1.5s infinite;
-      }
-      @keyframes pulse-suggest {
-        0% { stroke-width: 1px; opacity: 1; }
-        50% { stroke-width: 3px; opacity: 0.4; }
-        100% { stroke-width: 1px; opacity: 1; }
-      }`;
-    document.head.appendChild(pulse);
+    const diam = (s.diameter_m !== undefined && s.diameter_m !== null) ? (+s.diameter_m) : (s.diameter_km ? (+s.diameter_km * 1000) : null);
+    const diamStr = diam ? (diam >= 1000 ? (diam/1000).toFixed(2)+' km' : `${Math.round(diam)} m`) : '—';
+    const scoreVal = (s.water_score !== undefined && s.water_score !== null && !isNaN(+s.water_score)) ? Number(s.water_score).toFixed(3) : '—';
+    const psrFlag = (s.components && (s.components.psr === true || s.components.psr === 1)) ? 'Yes' : 'No';
 
-    const props = s.components || {};
     const popupHTML = `
-      <b>Suggested Crater:</b> ${s.name || s.id}<br>
-      <b>Diameter:</b> ${s.diameter_m ? (s.diameter_m > 1000 ? (s.diameter_m/1000).toFixed(2)+' km' : s.diameter_m+' m') : '—'}<br>
-      <b>Water Score:</b> ${s.water_score ? s.water_score.toFixed(2) : '—'}<br>
-      <b>PSR:</b> ${props.psr ? 'Yes' : 'No'}<br>
-      <div style="margin-top:8px;text-align:center">
-        <button id="accept-${s.id}" class="btn-accept">Accept</button>
-        <button id="dismiss-${s.id}" class="btn-dismiss">Dismiss</button>
+      <div style="min-width:220px">
+        <div style="font-weight:700;margin-bottom:6px">${escapeHtml(s.name || s.id || ('Suggestion ' + idx))}</div>
+        <div style="font-size:13px"><b>Diameter:</b> ${diamStr}</div>
+        <div style="font-size:13px"><b>Water score:</b> ${scoreVal}</div>
+        <div style="font-size:13px"><b>PSR:</b> ${psrFlag}</div>
+        <div style="margin-top:8px;text-align:center">
+          <button id="accept-${safeId}" class="btn small">Accept</button>
+          <button id="dismiss-${safeId}" class="btn small ghost">Dismiss</button>
+        </div>
       </div>
     `;
 
-    marker.bindPopup(popupHTML);
+    marker.bindPopup(popupHTML, { maxWidth: 260 });
 
-    marker.on("popupopen", () => {
-      document.getElementById(`accept-${s.id}`).onclick = () => {
-        addAnnotation(s);
-        marker.setStyle({ color: "#00ff99", fillColor: "#00ff99", fillOpacity: 0.7 });
-        marker.closePopup();
-        toast(`Accepted ${s.name || s.id}`);
-      };
-      document.getElementById(`dismiss-${s.id}`).onclick = () => {
-        map.removeLayer(marker);
-        toast(`Dismissed ${s.name || s.id}`);
-      };
+    marker.on('popupopen', () => {
+      // DOM elements created inside popup; guard for nulls
+      const acc = document.getElementById(`accept-${safeId}`);
+      const dis = document.getElementById(`dismiss-${safeId}`);
+      if (acc) {
+        acc.onclick = () => {
+          // convert suggestion into annotation object shape
+          const ann = {
+            id: s.id || `sugg_${Date.now()}`,
+            name: s.name || s.id || `Suggestion ${idx}`,
+            lat, lon,
+            water_score: (s.water_score !== undefined ? (isNaN(Number(s.water_score)) ? null : Number(s.water_score)) : null),
+            source: 'suggestion',
+            timestamp: new Date().toISOString(),
+            comments: []
+          };
+          addAnnotation(ann);
+          marker.setStyle({ color: '#36c36d', fillColor:'#36c36d', fillOpacity:0.75 });
+          marker.closePopup();
+          toast('Accepted suggestion');
+        };
+      }
+      if (dis) {
+        dis.onclick = () => {
+          try { clusterGroup.removeLayer(marker); } catch(e) { try { map.removeLayer(marker); } catch(e) {} }
+          toast('Suggestion dismissed');
+        };
+      }
     });
 
     clusterGroup.addLayer(marker);
+    shown++;
   });
 
   window.suggestionLayerGroup = clusterGroup;
   map.addLayer(clusterGroup);
 
-  console.log(`Suggestions displayed: ${suggestions.length}`);
-  toast(`${suggestions.length} suggestions displayed`);
+  console.log(`showSuggestions: total=${sourceList.length}, shown=${shown}, skipped=${skipped}`);
+  if (skipped && skippedReasons.length) console.warn('showSuggestions skipped items (sample):', skippedReasons.slice(0,6));
+  toast(`${shown} suggestions shown (${skipped} skipped)`);
 }
+
 
 function acceptSuggestion(s){
   const lat = (s.lat!==undefined?+s.lat:(s.latitude!==undefined?+s.latitude:null));
@@ -732,6 +790,7 @@ function scoreToColor(s){
 }
 
 /* End of file */
+
 
 
 
