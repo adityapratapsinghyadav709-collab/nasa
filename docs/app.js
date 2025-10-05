@@ -1,317 +1,351 @@
-// app.js — EmbiggenEye (cleaned, tolerant, highlight-on-click behaviour)
-// Replace your existing app.js with this file.
-// - clustered clickable markers (small & unobtrusive)
-// - single highlighted circle appears when user clicks a crater or searches it
-// - pixel->latlon heuristic to spread pixel-coord features for inspection
-// - safe popup close, blank-tile fallback, tolerant normalizer
+// app.js — EmbiggenEye (merged + recovered behavior)
+// - Preserves your original logic (pixel spread heuristic, accept/annotate, popups)
+// - Adds robust multi-part feature loading, PSR overlay, blank-tile fallback
+// - Map uses canvas renderer (preferCanvas: true)
+// - Put this file in docs/app.js (or adjust PAGE_BASE)
+// NOTE: Edit CONFIG below to match your repo (paths, IMAGE_GEOTIFF).
 (() => {
   'use strict';
 
-  // ---------- CONFIG ----------
-  // If you have real image georef, set this to map pixel->geo accurately.
-  // Example: IMAGE_GEOTIFF = { minLon:-45, maxLon:45, minLat:-90, maxLat:0, width:60000, height:40000 };
-  const IMAGE_GEOTIFF = null;
+  // ================== CONFIG ==================
+  // Edit these paths to match your repo. Paths are relative to the docs/ root (PAGE_BASE auto-detected).
+  const CONFIG = {
+    FEATURE_PARTS: ['features_part1.json', 'features_part2.json', 'features_part3.json'], // tried in order
+    FEATURE_SINGLE: 'features.json',
+    SUGGESTIONS: 'suggestions.json',
+    PSR_GEOJSON: 'static/psr_clean.geojson',
+    TILE_VIS: 'tiles/layer_vis/{z}/{x}/{y}.png',   // visible tiles
+    BLANK_TILE: 'static/blank-tile.png',
+    FALLBACK_IMAGE: 'static/fallback.png', // optional single-image fallback
+    MAX_MAP_ZOOM: 5,
+    DEBUG: false,
+    // If you have an accurately georeferenced image and want pixel->lonlat mapping,
+    // set IMAGE_GEOTIFF to an object with minLon,maxLon,minLat,maxLat,width,height
+    // Example: { minLon: -45, maxLon: 45, minLat: -90, maxLat: 0, width: 60000, height: 40000 }
+    IMAGE_GEOTIFF: null,
+  };
+  // ============================================
 
-  // features parts attempted (in /docs/)
-  const FEATURE_PARTS = ['features_part1.json', 'features_part2.json', 'features_part3.json'];
-  const FEATURE_SINGLE = 'features.json';
+  // ---------- tiny utilities ----------
+  const log = (...args) => { if (CONFIG.DEBUG) console.log(...args); };
+  const el = id => document.getElementById(id);
+  function toast(msg, t = 2200) {
+    const box = el('toast');
+    if (!box) { console.log('TOAST:', msg); return; }
+    box.textContent = msg;
+    box.classList.add('visible');
+    clearTimeout(box._timer);
+    box._timer = setTimeout(() => box.classList.remove('visible'), t);
+  }
+  function whenReady() {
+    return new Promise(r => {
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => r());
+      else r();
+    });
+  }
+  function waitForLeaflet(timeout = 5000) {
+    return new Promise((resolve, reject) => {
+      const start = Date.now();
+      (function check() {
+        if (window.L) return resolve();
+        if (Date.now() - start > timeout) return reject(new Error('Leaflet not found'));
+        setTimeout(check, 50);
+      })();
+    });
+  }
+  async function loadJSON(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`${url} -> ${res.status}`);
+    return await res.json();
+  }
+  function safeNum(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
+  function escapeHtml(s) { if (s == null) return ''; return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]); }
 
-  // blank tile fallback (place docs/static/blank-tile.png as a tiny transparent PNG)
-  const BLANK_TILE_NAME = 'static/blank-tile.png';
-
-  const DEBUG = false; // set true for verbose logs
-  const MAX_MAP_ZOOM = 5; // matches your tile generation
-
-  // ---------- utilities ----------
-  const whenReady = () => new Promise(r => {
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => r());
-    else r();
-  });
-
-  const waitForLeaflet = (timeout = 5000) => new Promise((resolve,reject)=>{
-    const start = Date.now();
-    (function check(){
-      if(window.L) return resolve();
-      if(Date.now()-start > timeout) return reject(new Error('Leaflet not found'));
-      setTimeout(check,50);
-    })();
-  });
-
-  function computePageBase(){
+  // compute page base (attempt to make relative paths robust)
+  function computePageBase() {
     let path = window.location.pathname || '/';
-    if (path.indexOf('.') !== -1) path = path.substring(0, path.lastIndexOf('/')+1);
+    // If page is e.g. /repo/docs/index.html -> want '/repo/docs/'
+    if (path.indexOf('.') !== -1) path = path.substring(0, path.lastIndexOf('/') + 1);
     else if (!path.endsWith('/')) path = path + '/';
     if (!path.startsWith('/')) path = '/' + path;
     return path;
   }
 
-  function toast(msg, t=2800){
-    const el = document.getElementById('toast');
-    if(!el){ if(DEBUG) console.log('[toast]', msg); return; }
-    el.textContent = msg;
-    el.classList.add('visible');
-    clearTimeout(el._timer);
-    el._timer = setTimeout(()=> el.classList.remove('visible'), t);
-  }
+  // ---------- normalization helpers (preserve old tolerant behavior) ----------
+  function normalizeFeature(f) {
+    // f may be GeoJSON Feature or plain props
+    const props = f.properties || f;
+    const out = Object.assign({}, props);
 
-  async function loadJSON(url){
-    const r = await fetch(url);
-    if(!r.ok) throw new Error(`${url} -> ${r.status}`);
-    return await r.json();
-  }
-
-  // ----- normalization helpers -----
-  function toNum(v){ return (v===undefined||v===null||v==='')? null : (Number(v)===Number(v)? Number(v) : null); }
-
-  function normalizeFeature(f){
-    const out = Object.assign({}, f);
-    // lat/lon fallbacks
+    // lat/lon detection: many naming combos used across pipelines
     let lat = toNum(out.lat ?? out.latitude ?? out.y ?? out.pixel_y);
     let lon = toNum(out.lon ?? out.longitude ?? out.x ?? out.pixel_x);
-    // pixel -> latlon if needed and IMAGE_GEOTIFF provided
-    if((lat==null || lon==null) && (out.x!==undefined || out.pixel_x!==undefined || out.y!==undefined || out.pixel_y!==undefined) && IMAGE_GEOTIFF){
-      const x = toNum(out.x ?? out.pixel_x), y = toNum(out.y ?? out.pixel_y);
-      if(x!=null && y!=null){
-        const mapped = pixelToLatLon(x,y);
-        if(mapped){ lat = mapped[0]; lon = mapped[1]; }
+
+    // if geometry present (GeoJSON Feature)
+    if ((lat == null || lon == null) && f.geometry && Array.isArray(f.geometry.coordinates)) {
+      const cc = f.geometry.coordinates;
+      if (cc.length >= 2) {
+        lon = toNum(cc[0]);
+        lat = toNum(cc[1]);
       }
     }
+
+    // support Robbins 0..360 lon -> convert to -180..180 for Leaflet
+    if (lon != null && lon > 180) lon = ((lon + 180) % 360) - 180;
+
+    // diameter: try many fields (meters preferred)
+    let dm = toNum(out.diameter_m ?? out.diameter ?? out.diam ?? out.DIAM_CIRC_IMG ?? out.DIAM_ELLI_MAJOR_IMG);
+    if (dm == null) {
+      const dk = toNum(out.diameter_km ?? out.diam_km);
+      if (dk != null) dm = dk * 1000;
+    } else {
+      // heuristics: if value looks like km (small), convert
+      if (dm > 0 && dm < 100) dm = dm * 1000; // assume km if less than 100
+    }
+
     out.lat = lat;
     out.lon = lon;
+    out.diameter_m = dm;
+    out.id = out.id !== undefined ? String(out.id) : (out.CRATER_ID ? String(out.CRATER_ID) : (out.name ? String(out.name) : 'f_' + Math.random().toString(36).slice(2, 9)));
+    out.name = out.name || out.id;
 
-    // diameter -> meters
-    let diameter_m = null;
-    if(out.diameter_m!==undefined) diameter_m = toNum(out.diameter_m);
-    else if(out.diameter_km!==undefined) diameter_m = toNum(out.diameter_km) * 1000;
-    else if(out.diameter!==undefined){
-      const v = toNum(out.diameter); if(v!=null) diameter_m = (v>0 && v<100)? v*1000 : v;
-    } else if(out.diam!==undefined) diameter_m = toNum(out.diam);
-    out.diameter_m = (diameter_m==null || Number.isNaN(diameter_m))? null : diameter_m;
+    out.water_score = toNum(out.water_score ?? out.score ?? out.waterScore) ?? 0;
+    out.psr_overlap = (out.psr_overlap !== undefined) ? Boolean(out.psr_overlap) : Boolean(out.psr);
+    out.spectral_mean = (out.spectral_mean !== undefined) ? toNum(out.spectral_mean) : null;
+    out.hydrogen_mean = (out.hydrogen_mean !== undefined) ? toNum(out.hydrogen_mean) : null;
+    out.depth_metric = (out.depth_metric !== undefined) ? toNum(out.depth_metric) : null;
 
-    // water score tolerant
-    out.water_score = (out.water_score!==undefined)? toNum(out.water_score)
-      : (out.score!==undefined? toNum(out.score) : (out.waterScore!==undefined? toNum(out.waterScore) : 0));
-    if(out.water_score==null || Number.isNaN(out.water_score)) out.water_score = 0;
+    // keep any pixel coords present too, to support spreading heuristic
+    out.x = out.x ?? out.pixel_x ?? out.col ?? null;
+    out.y = out.y ?? out.pixel_y ?? out.row ?? null;
 
-    // extras
-    out.psr_overlap = out.psr_overlap!==undefined? out.psr_overlap : (out.psr!==undefined? out.psr : 0);
-    out.spectral_mean = out.spectral_mean!==undefined? out.spectral_mean : (out.spectral!==undefined? out.spectral : null);
-    out.hydrogen_mean = out.hydrogen_mean!==undefined? out.hydrogen_mean : (out.hydrogen!==undefined? out.hydrogen : null);
-    out.depth_metric = out.depth_metric!==undefined? out.depth_metric : (out.depth!==undefined? out.depth : null);
-
-    out.id = out.id !== undefined ? out.id : (out.name !== undefined ? out.name : ('f_'+Math.random().toString(36).slice(2,9)));
-    out.name = out.name || out.id || `Feature ${out.id}`;
     return out;
   }
+  function toNum(v) { if (v === undefined || v === null || v === '') return null; const n = Number(v); return Number.isFinite(n) ? n : null; }
 
-  function pixelToLatLon(x,y){
-    if(!IMAGE_GEOTIFF) return null;
-    const { minLon, maxLon, minLat, maxLat, width, height } = IMAGE_GEOTIFF;
-    if([minLon,maxLon,minLat,maxLat,width,height].some(v=>v===undefined)) return null;
+  // ---------- pixel -> lat/lon functions (preserve & re-add IMAGE_GEOTIFF mapping) ----------
+  function pixelToLatLon(x, y) {
+    // If user provided precise IMAGE_GEOTIFF mapping, use it
+    const cfg = CONFIG.IMAGE_GEOTIFF;
+    if (!cfg) return null;
+    const { minLon, maxLon, minLat, maxLat, width, height } = cfg;
+    if ([minLon, maxLon, minLat, maxLat, width, height].some(v => v === undefined || v === null)) return null;
     const lon = minLon + (x / width) * (maxLon - minLon);
     const lat = maxLat - (y / height) * (maxLat - minLat);
     return [lat, lon];
   }
 
-  function scoreToColor(s){
-    s = Math.max(0, Math.min(1, (s==null?0:+s)));
-    const r = Math.round(255 * Math.min(1, Math.max(0, (s-0.5)*2)));
-    const b = Math.round(255 * Math.min(1, Math.max(0, (0.5-s)*2)));
-    const g = Math.round(255 * (1 - Math.abs(s-0.5)*2));
-    return `rgb(${r},${g},${b})`;
-  }
-
-  function diameterMetersToRadiusPx(d){
-    if(!d||isNaN(d)) return 8;
-    const km = Math.max(0.001, d/1000);
-    return Math.min(48, Math.max(6, 6 + Math.log10(km + 1)*14));
-  }
-
-  // ---------- main ----------
-  (async function main(){
-    try{
+  // ---------- UI & Map bootstrap ----------
+  (async function init() {
+    try {
       await whenReady();
       await waitForLeaflet();
 
       const PAGE_BASE = computePageBase();
-      const TILE_PATHS = {
-        vis: PAGE_BASE + 'tiles/layer_vis/{z}/{x}/{y}.png',
-        ir: PAGE_BASE + 'tiles/layer_ir/{z}/{x}/{y}.png',
-        elev: PAGE_BASE + 'tiles/layer_elev/{z}/{x}/{y}.png',
-        index: PAGE_BASE + 'tiles/layer_index/{z}/{x}/{y}.png',
-      };
       window.EMBIGEN = window.EMBIGEN || {};
       window.EMBIGEN.PAGE_BASE = PAGE_BASE;
-      window.EMBIGEN.TILE_PATHS = TILE_PATHS;
 
-      // Map init (center near south pole)
-      const map = L.map('map', { preferCanvas: true }).setView([-89.6, -45.0], 2);
+      // tile templates
+      const TILE_VIS = PAGE_BASE + CONFIG.TILE_VIS;
+      const BLANK_TILE = PAGE_BASE + CONFIG.BLANK_TILE;
+      const FALLBACK_IMAGE = PAGE_BASE + CONFIG.FALLBACK_IMAGE;
+
+      // create map (canvas renderer)
+      const map = L.map('map', { preferCanvas: true, worldCopyJump: false, minZoom: 0, maxZoom: CONFIG.MAX_MAP_ZOOM, attributionControl: false }).setView([-85, 45], 2);
       window.map = map;
 
-      // blank tile fallback relative to PAGE_BASE
-      const BLANK_TILE = PAGE_BASE + BLANK_TILE_NAME;
+      // tile layer
+      const visLayer = L.tileLayer(TILE_VIS, { maxZoom: CONFIG.MAX_MAP_ZOOM, errorTileUrl: BLANK_TILE, noWrap: true }).addTo(map);
 
-      // tile creation helper (errorTileUrl to quiet 404s)
-      function makeTileLayer(template, opts={}){
-        const baseOpts = Object.assign({ maxZoom: MAX_MAP_ZOOM, tileSize: 256, noWrap:true, errorTileUrl: BLANK_TILE }, opts);
-        return L.tileLayer(template, baseOpts);
-      }
+      // layer control (minimal)
+      L.control.layers({ 'Visible': visLayer }, {}, { collapsed: true }).addTo(map);
 
-      // Try tms:false by default. If your tiles were generated as TMS set tms:true if needed.
-      const layerVis = makeTileLayer(TILE_PATHS.vis);
-      const layerIR = makeTileLayer(TILE_PATHS.ir);
-      const layerElev = makeTileLayer(TILE_PATHS.elev);
-      const layerIndex = makeTileLayer(TILE_PATHS.index);
-
-      layerVis.addTo(map);
-      L.control.layers({'Visible': layerVis}, {}, { collapsed: true }).addTo(map);
-
-      // cluster group (small markers)
+      // cluster & layers
       const markerCluster = L.markerClusterGroup({ chunkedLoading: true, showCoverageOnHover: false });
-      map.addLayer(markerCluster);
-
-      // visible raw marker layer (hidden by default)
       const rawMarkerLayer = L.layerGroup();
-
-      // annotation layer (green markers)
       const annotationsLayer = L.layerGroup().addTo(map);
-
-      // suggestion layer (orange pulsing)
       const suggestionLayer = L.layerGroup().addTo(map);
 
-      // highlight circle (single)
+      map.addLayer(markerCluster);
+
+      // single highlight circle (like old app)
       let highlight = null;
-      function clearHighlight(){ if(highlight){ map.removeLayer(highlight); highlight = null; } }
-      function showHighlightAt(lat, lon, diameter_m, color='#00ffff'){
+      function clearHighlight() { if (highlight) { try { map.removeLayer(highlight); } catch (e) { } highlight = null; } }
+      function showHighlightAt(lat, lon, diameter_m, color = '#00ffff') {
         clearHighlight();
         const rpx = diameterMetersToRadiusPx(diameter_m || 1000);
-        // use circle with realistic geo radius? we use pixel-based visual radius for demo (map units) — keep visual consistent
-        highlight = L.circle([lat, lon], { radius: 5000, weight: 2.2, color, fillColor: color, fillOpacity: 0.12 }).addTo(map);
-        // pan/zoom into it lightly
-        try { map.setView([lat, lon], Math.min(MAX_MAP_ZOOM, Math.max(3, map.getZoom()))); } catch(e){}
+        // Use a geo-radius that is visually reasonable; old behavior used a small fixed radius — keep moderate radius (5km)
+        const radius = Math.max(2000, Math.min(50000, (diameter_m || 1000)));
+        highlight = L.circle([lat, lon], { radius, weight: 2.2, color, fillColor: color, fillOpacity: 0.12 }).addTo(map);
+        try { map.setView([lat, lon], Math.min(CONFIG.MAX_MAP_ZOOM, Math.max(3, map.getZoom()))); } catch (e) { }
       }
 
-      // ---- load features (multi-part then fallback) ----
+      // helper: color & radius
+      function scoreToColor(s) {
+        s = Math.max(0, Math.min(1, (s == null ? 0 : +s)));
+        const r = Math.round(255 * Math.min(1, Math.max(0, (s - 0.5) * 2)));
+        const b = Math.round(255 * Math.min(1, Math.max(0, (0.5 - s) * 2)));
+        const g = Math.round(255 * (1 - Math.abs(s - 0.5) * 2));
+        return `rgb(${r},${g},${b})`;
+      }
+      function diameterMetersToRadiusPx(d) {
+        if (!d || isNaN(d)) return 8;
+        const km = Math.max(0.001, d / 1000);
+        return Math.min(48, Math.max(6, 6 + Math.log10(km + 1) * 14));
+      }
+
+      // ---------- Load & normalize features (multi-part support) ----------
       let rawFeatures = [];
       let loadedCount = 0;
-      for (const part of FEATURE_PARTS){
-        try{
-          const url = PAGE_BASE + part;
-          const p = await loadJSON(url);
-          if(Array.isArray(p)){ rawFeatures = rawFeatures.concat(p); loadedCount += p.length; if(DEBUG) console.log('loaded',part,p.length); }
-        }catch(e){
-          try{
-            const p = await loadJSON(part);
-            if(Array.isArray(p)){ rawFeatures = rawFeatures.concat(p); loadedCount += p.length; if(DEBUG) console.log('loaded',part,'(bare)',p.length); }
-          }catch(e2){ if(DEBUG) console.log('no part', part); }
+
+      // try parts
+      for (const p of CONFIG.FEATURE_PARTS) {
+        try {
+          const url = PAGE_BASE + p;
+          const part = await loadJSON(url);
+          if (Array.isArray(part)) {
+            rawFeatures = rawFeatures.concat(part);
+            loadedCount += part.length;
+            log('loaded part', p, part.length);
+          } else if (part && Array.isArray(part.features)) {
+            rawFeatures = rawFeatures.concat(part.features);
+            loadedCount += part.features.length;
+            log('loaded part geojson', p, part.features.length);
+          }
+        } catch (e) {
+          // not found or error -> skip
+          log('no part', p, e.message);
         }
       }
-      if(loadedCount === 0){
-        try{
-          const url = PAGE_BASE + FEATURE_SINGLE;
-          const single = await loadJSON(url);
-          if(Array.isArray(single)){ rawFeatures = rawFeatures.concat(single); loadedCount = single.length; }
-          else if(single && Array.isArray(single.features)){ rawFeatures = rawFeatures.concat(single.features); loadedCount = single.features.length; }
-        }catch(e){
-          try{
-            const single = await loadJSON(FEATURE_SINGLE);
-            if(Array.isArray(single)){ rawFeatures = rawFeatures.concat(single); loadedCount = single.length; }
-            else if(single && Array.isArray(single.features)){ rawFeatures = rawFeatures.concat(single.features); loadedCount = single.features.length; }
-          }catch(e2){
-            if(DEBUG) console.log('no features found');
+
+      // fallback to single
+      if (loadedCount === 0) {
+        try {
+          const s = await loadJSON(PAGE_BASE + CONFIG.FEATURE_SINGLE);
+          if (Array.isArray(s)) rawFeatures = rawFeatures.concat(s);
+          else if (s && Array.isArray(s.features)) rawFeatures = rawFeatures.concat(s.features);
+          log('loaded single features.json', rawFeatures.length);
+        } catch (e) {
+          // try bare filename (if PAGE_BASE trick failed)
+          try {
+            const s2 = await loadJSON(CONFIG.FEATURE_SINGLE);
+            if (Array.isArray(s2)) rawFeatures = rawFeatures.concat(s2);
+            else if (s2 && Array.isArray(s2.features)) rawFeatures = rawFeatures.concat(s2.features);
+            log('loaded single fallback', rawFeatures.length);
+          } catch (e2) {
+            log('no features found', e2 ? e2.message : '');
           }
         }
       }
 
-      // normalize
-      let features = rawFeatures.map(normalizeFeature);
+      // If still empty -> warn and keep minimal behavior
+      if (!rawFeatures.length) {
+        toast('No features found. Put features_part*.json or features.json in docs/');
+      }
 
-      // Heuristic: if lat/lon mostly missing but pixel x/y exist, auto-spread them across map bounds for inspection
-      function detectPixelLikeAndSpread(list){
-        // count lat present
-        const latCount = list.filter(f=> f.lat!=null && f.lon!=null).length;
-        const total = list.length;
-        // detect x/y presence
-        const xCount = rawFeatures.filter(f=> f.x!==undefined || f.pixel_x!==undefined).length;
-        const yCount = rawFeatures.filter(f=> f.y!==undefined || f.pixel_y!==undefined).length;
-        if(latCount/Math.max(1,total) < 0.2 && xCount>Math.max(10, total*0.05) && yCount>Math.max(10, total*0.05)){
-          if(DEBUG) console.log('Detected pixel-like features; applying heuristic spread for inspection');
-          // compute pixel min/max
-          const xs = rawFeatures.map(f=> toNum(f.x ?? f.pixel_x)).filter(n=>n!=null);
-          const ys = rawFeatures.map(f=> toNum(f.y ?? f.pixel_y)).filter(n=>n!=null);
-          if(xs.length && ys.length){
-            const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-            // map bounds to spread across: prefer current map bounds if reasonable, else a south-pole focused box
-            const mapBounds = map.getBounds();
-            let minLat = -89.95, maxLat = -89.2, minLon = -180, maxLon = 180;
-            if(mapBounds && isFinite(mapBounds.getSouth())){
-              minLat = mapBounds.getSouth(); maxLat = mapBounds.getNorth();
-              minLon = mapBounds.getWest(); maxLon = mapBounds.getEast();
+      // normalize features (preserve original properties where possible)
+      let features = rawFeatures.map(f => normalizeFeature(f));
+
+      // ---------- Pixel-only features detection and "spread" heuristic (preserved from old app) ----------
+      // If many features lack lat/lon but have pixel x/y (from catalog -> pixel conversion), produce temporary lat/lon for UI inspection.
+      function detectPixelLikeAndSpread(featuresList) {
+        // Count features with lat/lon
+        const total = featuresList.length;
+        const latCount = featuresList.filter(f => f.lat != null && f.lon != null).length;
+        const xCount = featuresList.filter(f => f.x != null || f.pixel_x != null).length;
+        const yCount = featuresList.filter(f => f.y != null || f.pixel_y != null).length;
+
+        // If most features are pixel-only and there are enough x/y values to compute spread, do it.
+        if (latCount / Math.max(1, total) < 0.2 && xCount > Math.max(10, total * 0.05) && yCount > Math.max(10, total * 0.05)) {
+          log('Detected pixel-like features; applying spread heuristic.');
+
+          // gather x/y arrays
+          const xs = featuresList.map(f => toNum(f.x ?? f.pixel_x)).filter(n => n != null);
+          const ys = featuresList.map(f => toNum(f.y ?? f.pixel_y)).filter(n => n != null);
+          if (!xs.length || !ys.length) return false;
+
+          const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+
+          // If IMAGE_GEOTIFF present, map using precise geotransform; otherwise map into current map bounds
+          const mapBounds = map.getBounds();
+          let minLat = -89.95, maxLat = -72.0, minLon = -180, maxLon = 180;
+          // If map already has reasonable bounds, use them
+          if (mapBounds && isFinite(mapBounds.getSouth())) {
+            minLat = mapBounds.getSouth(); maxLat = mapBounds.getNorth();
+            minLon = mapBounds.getWest(); maxLon = mapBounds.getEast();
+          }
+
+          // Spread: produce lat/lon for each pixel-feature
+          features = featuresList.map(orig => {
+            const f = Object.assign({}, orig);
+            const x = toNum(orig.x ?? orig.pixel_x), y = toNum(orig.y ?? orig.pixel_y);
+            if (x == null || y == null) return f;
+
+            // If IMAGE_GEOTIFF mapping exists, use it to get accurate lat/lon
+            if (CONFIG.IMAGE_GEOTIFF) {
+              const mapped = pixelToLatLon(x, y);
+              if (mapped) {
+                f.lat = mapped[0];
+                f.lon = mapped[1];
+                f._pixel_spread = true;
+                return f;
+              }
             }
-            // write debug lat/lon for each
-            features = rawFeatures.map((orig) => {
-              const f = normalizeFeature(orig);
-              const x = toNum(orig.x ?? orig.pixel_x), y = toNum(orig.y ?? orig.pixel_y);
-              if(x==null || y==null) return f;
-              // spread x->lon, y->lat
-              const lon = minLon + ((x - minX) / (maxX - minX || 1)) * (maxLon - minLon);
-              const lat = maxLat - ((y - minY) / (maxY - minY || 1)) * (maxLat - minLat);
-              f.lat = lat; f.lon = lon;
-              f._pixel_spread = true;
-              return f;
-            });
-            return true;
-          }
+
+            // Heuristic spread across current map bounds
+            const lon = minLon + ((x - minX) / (maxX - minX || 1)) * (maxLon - minLon);
+            const lat = maxLat - ((y - minY) / (maxY - minY || 1)) * (maxLat - minLat);
+            f.lat = lat; f.lon = lon; f._pixel_spread = true;
+            return f;
+          });
+          return true;
         }
         return false;
       }
+
       detectPixelLikeAndSpread(features);
 
-      // store for debug
-      window.EMBIGEN.mergedFeatures = features;
+      // Persist loaded features to global for debugging
+      window.EMBIGEN.features = features;
 
       toast(`Loaded ${features.length} features`);
 
-      // ----- render behavior: create small invisible/small markers in cluster, highlight on click -----
-      const featureMap = new Map();
+      // ---------- feature rendering (clustered markers, popups, accept flow preserved) ----------
+      const featureMap = new Map(); // id -> { feature, marker }
 
-      // create small marker icon style: keep subtle so map not cluttered
-      function makeMarkerForFeature(f){
-        // use circleMarker with tiny radius and low opacity; clickable
+      function makeMarkerForFeature(f) {
+        // small circle marker; uses Canvas renderer automatically due to preferCanvas:true
         const marker = L.circleMarker([f.lat, f.lon], {
-          radius: 6,
-          color: '#0aa',
+          radius: Math.max(5, (f.diameter_m ? diameterMetersToRadiusPx(f.diameter_m) / 6 : 6)),
+          color: scoreToColor(f.water_score || 0),
           weight: 1,
-          fillOpacity: 0.7,
-          opacity: 0.9
+          fillOpacity: 0.8
         });
+
         marker.featureId = f.id;
-        // click -> open popup and highlight
-        marker.on('click', (e)=>{
-          // ensure normalized
-          const ff = f;
-          // open popup
-          const popupHtml = buildPopupHtml(ff);
+        marker.on('click', (e) => {
+          // Build popup (preserve Accept and Comment behavior)
+          const popupHtml = buildPopupHtml(f);
           marker.bindPopup(popupHtml, { minWidth: 220 }).openPopup();
-          // safe popup close replacement available later when pressing Accept
-          // show single highlight circle (uses visual radius estimate)
-          showHighlightAt(ff.lat, ff.lon, ff.diameter_m || 1000);
+          // highlight circle
+          showHighlightAt(f.lat, f.lon, f.diameter_m || 1000);
         });
+
         return marker;
       }
 
-      function buildPopupHtml(f){
-        const diamDisplay = f.diameter_m ? `${Math.round(f.diameter_m)} m (${(f.diameter_m/1000).toFixed(2)} km)` : '—';
+      function buildPopupHtml(f) {
+        const diamDisplay = f.diameter_m ? `${Math.round(f.diameter_m)} m (${(f.diameter_m / 1000).toFixed(2)} km)` : '—';
         const score = (f.water_score != null) ? f.water_score : 0;
-        const spectral = (f.spectral_mean != null) ? f.spectral_mean.toFixed(3) : '—';
-        const hydrogen = (f.hydrogen_mean != null) ? f.hydrogen_mean.toFixed(3) : '—';
-        const depth = (f.depth_metric != null) ? f.depth_metric.toFixed(3) : '—';
+        const spectral = (f.spectral_mean != null) ? Number(f.spectral_mean).toFixed(3) : '—';
+        const hydrogen = (f.hydrogen_mean != null) ? Number(f.hydrogen_mean).toFixed(3) : '—';
+        const depth = (f.depth_metric != null) ? Number(f.depth_metric).toFixed(3) : '—';
         const psr = f.psr_overlap ? 'Yes' : 'No';
         return `
-          <div class="popup-card">
+          <div class="popup-card" style="color:#dfeaf5">
             <h4 style="margin:0 0 6px 0;">${escapeHtml(f.name || f.id || 'Feature')}</h4>
             <table class="popup-table" style="width:100%;font-size:13px;">
-              <tr><td>water_score</td><td style="text-align:right;"><b>${score.toFixed(3)}</b></td></tr>
+              <tr><td>water_score</td><td style="text-align:right;"><b>${Number(score).toFixed(3)}</b></td></tr>
               <tr><td>PSR overlap</td><td style="text-align:right;">${psr}</td></tr>
               <tr><td>diameter</td><td style="text-align:right;">${diamDisplay}</td></tr>
               <tr><td>spectral_mean</td><td style="text-align:right;">${spectral}</td></tr>
@@ -325,169 +359,241 @@
           </div>`;
       }
 
-      // safe HTML escape
-      function escapeHtml(s){ if(s==null) return ''; return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
-
-      // render features as cluster items (no giant circles)
-      function renderFeatures(list){
+      // render all features into cluster (and basic fit bounds)
+      function renderFeatures(list) {
         markerCluster.clearLayers();
         rawMarkerLayer.clearLayers();
         featureMap.clear();
-        for(const f of list){
-          if(f.lat==null || f.lon==null) {
-            if(DEBUG) console.warn('skip feature no coords', f.id); continue;
+        for (const f of list) {
+          if (f.lat == null || f.lon == null) {
+            if (CONFIG.DEBUG) console.warn('skip feature no coords', f.id);
+            continue;
           }
           const marker = makeMarkerForFeature(f);
-          // attach popupopen behaviour: wire accept and comment buttons safely
-          marker.on('popupopen', e=>{
-            const popupEl = e.popup.getElement();
-            if(!popupEl) return;
-            const accept = popupEl.querySelector('.accept-btn');
-            if(accept){
-              accept.onclick = ()=> {
-                addAnnotationIfNew(f);
-                // safe close
-                try {
-                  if(e.popup && e.popup._source && typeof e.popup._source.closePopup === 'function') e.popup._source.closePopup();
-                  else if(typeof map.closePopup === 'function') map.closePopup();
-                } catch(err){ if(DEBUG) console.warn('popup close failed', err); }
-              };
-            }
-            const commentBtn = popupEl.querySelector('.comment-btn');
-            if(commentBtn){
-              commentBtn.onclick = ()=> {
-                // placeholder: open small prompt (not saved permanently yet)
-                const note = prompt('Add a comment (not saved yet):');
-                if(note !== null){
-                  toast('Comment captured locally (not saved). Will implement persistent comments soon.');
-                  // store on feature object for now
-                  f._local_comment = note;
-                }
-              };
-            }
-          });
           markerCluster.addLayer(marker);
           rawMarkerLayer.addLayer(marker);
           featureMap.set(String(f.id), { feature: f, marker });
         }
-        // by default show clusters; remove rawMarkerLayer from map unless user toggles raw
-        if(map.hasLayer(rawMarkerLayer)) map.removeLayer(rawMarkerLayer);
-        if(!map.hasLayer(markerCluster)) map.addLayer(markerCluster);
+        if (map.hasLayer(rawMarkerLayer)) map.removeLayer(rawMarkerLayer);
+        if (!map.hasLayer(markerCluster)) map.addLayer(markerCluster);
 
-        // fit bounds lightly
-        const latlngs = list.filter(f=> f.lat!=null && f.lon!=null).map(f=> [f.lat,f.lon]);
-        if(latlngs.length){
-          try{ map.fitBounds(latlngs, { maxZoom: Math.min(MAX_MAP_ZOOM, 4), padding: [40,40] }); } catch(e){ if(DEBUG) console.warn('fitBounds', e); }
+        // fit bounds lightly (safeguard)
+        const latlngs = list.filter(f => f.lat != null && f.lon != null).map(f => [f.lat, f.lon]);
+        if (latlngs.length) {
+          try { map.fitBounds(latlngs, { maxZoom: Math.min(CONFIG.MAX_MAP_ZOOM, 4), padding: [40, 40] }); } catch (e) { log('fitBounds err', e); }
         }
       }
+
+      // ---------- popup accept/comment wiring (delegated) ----------
+      map.on('popupopen', (e) => {
+        const popupEl = e.popup.getElement();
+        if (!popupEl) return;
+        const acceptBtn = popupEl.querySelector('.accept-btn');
+        if (acceptBtn) {
+          acceptBtn.onclick = () => {
+            // find name in popup (first h4)
+            const title = popupEl.querySelector('h4')?.textContent || null;
+            if (title) {
+              const f = features.find(x => String(x.name) === title || String(x.id) === title);
+              if (f) addAnnotationIfNew(f);
+            }
+            try { if (e.popup && e.popup._source && typeof e.popup._source.closePopup === 'function') e.popup._source.closePopup(); else map.closePopup(); } catch (err) { }
+          };
+        }
+        const commentBtn = popupEl.querySelector('.comment-btn');
+        if (commentBtn) {
+          commentBtn.onclick = () => {
+            const note = prompt('Add a comment (saved locally):');
+            if (note !== null) {
+              toast('Comment saved locally (attached to feature in memory).');
+              // attempt to find feature id attribute
+              const fid = commentBtn.getAttribute('data-id');
+              if (fid) {
+                const entry = featureMap.get(String(fid));
+                if (entry) entry.feature._local_comment = note;
+              }
+            }
+          };
+        }
+      });
 
       // initial render
       renderFeatures(features);
 
-      // -------------- annotations ----------------
-      const ANNOTATION_KEY = 'embiggen_annotations_v1';
-      function loadAnnotations(){ try{ return JSON.parse(localStorage.getItem(ANNOTATION_KEY) || '[]'); }catch(e){ return []; } }
-      function saveAnnotations(a){ localStorage.setItem(ANNOTATION_KEY, JSON.stringify(a)); }
-      function renderAnnotationsList(){ const el = document.getElementById('annotationsList'); const anns = loadAnnotations(); if(!el) return; if(!anns.length) el.textContent='None yet'; else el.innerHTML = anns.map(a=>`<div class="ann-row"><b>${escapeHtml(a.name)}</b> <span class="score">${(a.water_score||'—')}</span></div>`).join(''); }
+      // ---------- annotations (localStorage) ----------
+      const ANNOT_KEY = 'embiggen_annotations_v1';
+      function loadAnnotations() { try { return JSON.parse(localStorage.getItem(ANNOT_KEY) || '[]'); } catch (e) { return []; } }
+      function saveAnnotations(a) { localStorage.setItem(ANNOT_KEY, JSON.stringify(a)); }
+      function renderAnnotationsList() {
+        const elA = el('annotationsList'); if (!elA) return;
+        const anns = loadAnnotations();
+        if (!anns.length) { elA.textContent = 'None yet'; return; }
+        elA.innerHTML = anns.map(a => `<div class="ann-row"><b>${escapeHtml(a.name)}</b> <span class="score">${(a.water_score || '—')}</span></div>`).join('');
+      }
       renderAnnotationsList();
 
-      function addAnnotationIfNew(feature){
+      function addAnnotationIfNew(feature) {
         const f = feature;
-        if(!f || f.lat==null || f.lon==null){ toast('Cannot annotate (no coords)'); return; }
+        if (!f || f.lat == null || f.lon == null) { toast('Cannot annotate (no coords)'); return; }
         const anns = loadAnnotations();
-        if(anns.find(a=> a.id && f.id && a.id === f.id) || anns.find(a=> a.lat === f.lat && a.lon === f.lon)){
+        if (anns.find(a => a.id && f.id && a.id === f.id) || anns.find(a => a.lat === f.lat && a.lon === f.lon)) {
           toast('Already annotated');
           return;
         }
-        const ann = { id: f.id || null, name: f.name || f.id || 'candidate', lon: f.lon, lat: f.lat, water_score: f.water_score||null, ts: new Date().toISOString(), comment: f._local_comment || null };
+        const ann = { id: f.id || null, name: f.name || f.id || 'candidate', lon: f.lon, lat: f.lat, water_score: f.water_score || null, ts: new Date().toISOString(), comment: f._local_comment || null };
         anns.push(ann); saveAnnotations(anns); renderAnnotationsList();
-        // add visual annotation marker
-        const m = L.circleMarker([f.lat,f.lon], { radius: 10, color: '#2ee6a1', weight: 1.4, fillOpacity: 0.6 }).addTo(annotationsLayer).bindPopup(`<b>${escapeHtml(f.name)}</b><br/>annotation`);
-        // ensure annotations layer visible
-        if(!map.hasLayer(annotationsLayer)) map.addLayer(annotationsLayer);
+        // add visual marker
+        const m = L.circleMarker([f.lat, f.lon], { radius: 10, color: '#2ee6a1', weight: 1.4, fillOpacity: 0.6 }).addTo(annotationsLayer).bindPopup(`<b>${escapeHtml(f.name)}</b><br/>annotation`);
+        if (!map.hasLayer(annotationsLayer)) map.addLayer(annotationsLayer);
       }
-
-      // expose simple API for external controls
-      window.EMBIGEN.getFeatureById = id => featureMap.get(String(id))?.feature || null;
-      window.EMBIGEN.openFeature = id => {
-        const entry = featureMap.get(String(id));
-        if(!entry) return toast('Feature not found');
-        entry.marker.fire('click');
-        entry.marker.openPopup();
-      };
-
-      // --- UI wiring: search, suggest, export, layer radios ---
-      const searchInput = document.getElementById('searchInput');
-      const searchBtn = document.getElementById('searchBtn');
-      const suggestBtn = document.getElementById('suggestBtn');
-      const exportBtn = document.getElementById('exportBtn');
-
-      function doSearch(){
-        const q = (searchInput && searchInput.value || '').trim().toLowerCase();
-        if(!q) { toast('Type a crater name or id'); return; }
-        const found = features.find(f=> (f.name && f.name.toLowerCase().includes(q)) || (String(f.id).toLowerCase() === q));
-        if(!found) { toast('No matching crater found'); return; }
-        window.EMBIGEN.openFeature(found.id);
-      }
-      if(searchBtn) searchBtn.addEventListener('click', doSearch);
-      if(searchInput) searchInput.addEventListener('keydown', e=>{ if(e.key==='Enter') doSearch(); });
-
-      // suggestions loader (falls back to top by water_score)
-      async function loadSuggestionsOrTopN(n=10){
-        try{ return await loadJSON(PAGE_BASE + 'suggestions.json'); } catch(e){ try{ return await loadJSON('suggestions.json'); }catch(e2){ return features.slice().sort((a,b)=> (b.water_score||0) - (a.water_score||0)).slice(0,n);} }
-      }
-
-      if(suggestBtn) suggestBtn.addEventListener('click', async ()=>{
-        const list = await loadSuggestionsOrTopN(10);
-        suggestionLayer.clearLayers();
-        list.forEach(s=>{
-          const nf = normalizeFeature(s);
-          if(nf.lat==null || nf.lon==null) return;
-          const m = L.circleMarker([nf.lat,nf.lon], { radius:12, color:'#ff7a00', weight:2, fillOpacity:0.25 }).addTo(suggestionLayer);
-          m.bindPopup(`<b>${escapeHtml(nf.name)}</b><br/>score:${(nf.water_score||0).toFixed(3)}<br/><button class="btn small accept-btn">Accept</button>`);
-          m.on('popupopen', e=>{
-            const el = e.popup.getElement(); if(!el) return;
-            const btn = el.querySelector('.accept-btn'); if(btn) btn.onclick = ()=> { addAnnotationIfNew(nf); try{ if(e.popup && e.popup._source && typeof e.popup._source.closePopup==='function') e.popup._source.closePopup(); else map.closePopup(); }catch(_){} };
-          });
-        });
-        toast(`${list.length} suggestions shown`);
-      });
 
       // export annotations
-      if(exportBtn) exportBtn.addEventListener('click', ()=>{
+      el('exportBtn')?.addEventListener('click', () => {
         const anns = loadAnnotations();
-        const featuresGeo = anns.map(a=>({ type:'Feature', properties:{ id:a.id, name:a.name, water_score:a.water_score, ts:a.ts, comment: a.comment||null }, geometry:{ type:'Point', coordinates:[a.lon, a.lat] } }));
-        const fc = { type:'FeatureCollection', features: featuresGeo };
+        const featuresGeo = anns.map(a => ({ type: 'Feature', properties: { id: a.id, name: a.name, water_score: a.water_score, ts: a.ts, comment: a.comment || null }, geometry: { type: 'Point', coordinates: [a.lon, a.lat] } }));
+        const fc = { type: 'FeatureCollection', features: featuresGeo };
         const blob = new Blob([JSON.stringify(fc, null, 2)], { type: 'application/geo+json' });
         const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'embiggen_annotations.geojson'; a.click(); URL.revokeObjectURL(url);
       });
 
-      // layer radio handling (vis/ir/elev/index toggles)
-      const radios = document.querySelectorAll('input[name="layer"]');
-      radios.forEach(r => r.addEventListener('change', e=>{
-        const v = e.target.value;
-        map.removeLayer(layerVis); map.removeLayer(layerIR); map.removeLayer(layerElev); map.removeLayer(layerIndex);
-        if(v==='vis') map.addLayer(layerVis);
-        else if(v==='ir') map.addLayer(layerIR);
-        else if(v==='elev') map.addLayer(layerElev);
-        else if(v==='index') map.addLayer(layerIndex);
-      }));
+      // ---------- suggestions (try suggestions.json then fallback to top features) ----------
+      async function loadSuggestionsOrTopN(n = 10) {
+        try {
+          const s = await loadJSON(PAGE_BASE + CONFIG.SUGGESTIONS);
+          if (s && s.suggestions) return s.suggestions;
+          if (Array.isArray(s)) return s;
+        } catch (e) { /* ignore */ }
+        // fallback: top n features ordered by water_score
+        const ordered = (window.EMBIGEN.features || []).slice().sort((a, b) => (b.water_score || 0) - (a.water_score || 0)).slice(0, n);
+        return ordered;
+      }
 
-      // small helper: expose internals & debug
-      window.EMBIGEN.map = map;
-      window.EMBIGEN.mergedFeatures = features;
-      window.EMBIGEN.renderFeatures = renderFeatures;
+      el('suggestBtn')?.addEventListener('click', async () => {
+        suggestionLayer.clearLayers();
+        const list = await loadSuggestionsOrTopN(20);
+        for (const s of list) {
+          const nf = (typeof s === 'object' && (s.lat !== undefined || s.geometry)) ? normalizeFeature(s) : s;
+          if (nf.lat == null || nf.lon == null) continue;
+          const m = L.circleMarker([nf.lat, nf.lon], { radius: 12, color: '#ff7a00', weight: 2, fillOpacity: 0.25 }).addTo(suggestionLayer);
+          m.bindPopup(`<b>${escapeHtml(nf.name || nf.id)}</b><br/>score:${(nf.water_score || 0).toFixed ? (nf.water_score || 0).toFixed(3) : (nf.water_score || 0)}<br/><button class="btn small accept-btn">Accept</button>`);
+          m.on('popupopen', e => {
+            const pop = e.popup.getElement();
+            if (!pop) return;
+            const btn = pop.querySelector('.accept-btn');
+            if (btn) btn.onclick = () => { addAnnotationIfNew(nf); try { if (e.popup && e.popup._source && typeof e.popup._source.closePopup === 'function') e.popup._source.closePopup(); else map.closePopup(); } catch (_) { } };
+          });
+        }
+        if (!map.hasLayer(suggestionLayer)) map.addLayer(suggestionLayer);
+        toast(`${list.length} suggestions shown`);
+      });
+
+      // ---------- search control ----------
+      const searchInput = el('searchInput'), searchBtn = el('searchBtn');
+      function doSearch() {
+        const q = (searchInput && searchInput.value || '').trim().toLowerCase();
+        if (!q) { toast('Type a crater name or id'); return; }
+        const found = features.find(f => (f.name && f.name.toLowerCase().includes(q)) || (String(f.id).toLowerCase() === q));
+        if (!found) { toast('No matching crater found'); return; }
+        // open feature if rendered
+        const entry = featureMap.get(String(found.id));
+        if (entry && entry.marker) {
+          entry.marker.fire('click'); entry.marker.openPopup();
+        } else {
+          // highlight at guessed coords
+          if (found.lat != null && found.lon != null) showHighlightAt(found.lat, found.lon, found.diameter_m || 1000);
+        }
+      }
+      searchBtn?.addEventListener('click', doSearch);
+      searchInput?.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+
+      // ---------- PSR overlay (visual only) ----------
+      try {
+        const psr = await loadJSON(PAGE_BASE + CONFIG.PSR_GEOJSON);
+        if (psr && psr.type === 'FeatureCollection') {
+          const psrLayer = L.geoJSON(psr, { style: { color: '#99f3ff', weight: 1.0, fillOpacity: 0.06 } }).addTo(map);
+          // optional toggle UI could be added later
+        }
+      } catch (e) { log('PSR not loaded', e.message); }
+
+      // ---------- Permalink handling ----------
+      function setPermalink({ lat, lon, z, layer, id }) {
+        const params = new URLSearchParams();
+        if (lat != null) params.set('lat', lat.toFixed(6));
+        if (lon != null) params.set('lon', lon.toFixed(6));
+        if (z != null) params.set('z', z);
+        if (layer) params.set('layer', layer);
+        if (id) params.set('id', id);
+        const h = '#' + params.toString();
+        history.replaceState(null, '', window.location.pathname + h);
+      }
+      function readPermalink() {
+        if (!location.hash) return null;
+        const q = location.hash.replace(/^#/, '');
+        const params = new URLSearchParams(q);
+        const out = {};
+        if (params.has('lat') && params.has('lon')) out.lat = safeNum(params.get('lat')), out.lon = safeNum(params.get('lon'));
+        if (params.has('z')) out.z = parseInt(params.get('z'));
+        if (params.has('layer')) out.layer = params.get('layer');
+        if (params.has('id')) out.id = params.get('id');
+        return out;
+      }
+
+      // If user clicks a feature, update permalink
+      map.on('popupopen', e => {
+        const latlng = e.popup.getLatLng();
+        if (!latlng) return;
+        setPermalink({ lat: latlng.lat, lon: latlng.lng, z: map.getZoom() });
+      });
+
+      // apply permalink if present (after loading)
+      setTimeout(() => {
+        const p = readPermalink();
+        if (p) {
+          if (p.layer) {
+            const radios = document.querySelectorAll('input[name="layer"]');
+            radios.forEach(r => { if (r.value === p.layer) r.checked = true; });
+          }
+          if (p.lat != null && p.lon != null) {
+            map.setView([p.lat, p.lon], p.z || 3);
+            if (p.id) {
+              const entry = featureMap.get(String(p.id));
+              if (entry) entry.marker.fire('click');
+            }
+          } else if (p.id) {
+            const entry = featureMap.get(String(p.id));
+            if (entry) entry.marker.fire('click');
+          }
+        }
+      }, 700);
+
+      // ---------- final: expose internals for debugging & finish UI wiring ----------
       window.EMBIGEN.featureMap = featureMap;
+      window.EMBIGEN.features = features;
       window.EMBIGEN.annotationsLayer = annotationsLayer;
-      if(DEBUG) console.log('EMBIGEN ready', { PAGE_BASE, TILE_PATHS, featuresLoaded: features.length });
+      window.EMBIGEN.map = map;
 
-      // final toast
-      toast('EmbiggenEye ready — click a marker to highlight & inspect');
+      renderAnnotationsList();
 
-    } catch(err){
+      toast('EmbiggenEye ready — click a marker to inspect');
+
+    } catch (err) {
       console.error('App init failed:', err);
-      try{ toast('Initialization error — check console'); } catch(e){}
+      try { toast('Initialization error — check console'); } catch (e) { }
     }
   })();
 
-})(); 
+  // ---------- small helpers reused ----------
+  function scoreToColor(s) {
+    s = Math.max(0, Math.min(1, (s == null ? 0 : +s)));
+    const r = Math.round(255 * Math.min(1, Math.max(0, (s - 0.5) * 2)));
+    const b = Math.round(255 * Math.min(1, Math.max(0, (0.5 - s) * 2)));
+    const g = Math.round(255 * (1 - Math.abs(s - 0.5) * 2));
+    return `rgb(${r},${g},${b})`;
+  }
+  function diameterMetersToRadiusPx(d) {
+    if (!d || isNaN(d)) return 8;
+    const km = Math.max(0.001, d / 1000);
+    return Math.min(48, Math.max(6, 6 + Math.log10(km + 1) * 14));
+  }
+
+})(); // end IIFE
