@@ -579,26 +579,182 @@ function acceptSuggestion(s){
 }
 
 /* --------------- Annotations local storage --------------- */
-function loadLocalAnnotations(){ try{ annotations = JSON.parse(localStorage.getItem(CONFIG.ANNOTATIONS_LS_KEY) || '[]'); } catch(e){ annotations = []; } }
-function saveLocalAnnotations(){ localStorage.setItem(CONFIG.ANNOTATIONS_LS_KEY, JSON.stringify(annotations)); renderAnnotationsList(); }
-function addAnnotation(a){ if(annotations.find(x=>x.id===a.id)){ toast('Annotation exists'); return; } annotations.push(a); saveLocalAnnotations(); toast('Annotation saved'); }
-function deleteAnnotation(id){ annotations = annotations.filter(x=> x.id !== id); saveLocalAnnotations(); toast('Deleted'); }
-function renderAnnotationsList(){
-  const el = $('annotationsList'); if(!el) return;
-  if(!annotations.length){ el.innerHTML = '<div class="muted">None yet</div>'; return; }
-  el.innerHTML = annotations.map(a => `
-    <div style="padding:6px;border-radius:8px;display:flex;justify-content:space-between;align-items:center">
-      <div><div style="font-weight:700">${escapeHtml(a.name)}</div><div class="muted" style="font-size:12px">${a.lat? a.lat.toFixed(4):''}, ${a.lon? a.lon.toFixed(4):''} • ${formatScore(a.water_score)}</div></div>
-      <div style="display:flex;gap:6px">
-        <button class="btn small" data-act="zoom" data-id="${escapeHtml(a.id)}">Zoom</button>
-        <button class="btn small ghost" data-act="del" data-id="${escapeHtml(a.id)}">Delete</button>
-      </div>
-    </div>`).join('');
-  el.querySelectorAll('button[data-act]').forEach(b=>{
-    const act = b.getAttribute('data-act'), id = b.getAttribute('data-id');
-    b.onclick = ()=> { if(act==='zoom'){ const a = annotations.find(x=> x.id===id); if(a && a.lat && a.lon) map.setView([a.lat, a.lon], Math.max(4, map.getZoom())); } if(act==='del'){ deleteAnnotation(id); } };
+// ----------------- Annotation storage + UI (replace old versions) -----------------
+function loadLocalAnnotations() {
+  try {
+    annotations = JSON.parse(localStorage.getItem(CONFIG.ANNOTATIONS_LS_KEY) || '[]') || [];
+  } catch (e) {
+    console.warn('loadLocalAnnotations parse error', e);
+    annotations = [];
+  }
+}
+
+function saveLocalAnnotations() {
+  try {
+    localStorage.setItem(CONFIG.ANNOTATIONS_LS_KEY, JSON.stringify(annotations));
+  } catch (e) {
+    console.warn('saveLocalAnnotations error', e);
+  }
+  // re-render list so UI stays in sync
+  renderAnnotationsList();
+}
+
+// Add annotation (deduplicates by id). Accepts either suggestion shape or canonical annotation shape.
+function addAnnotation(a) {
+  if (!a || !a.id) {
+    toast('Invalid annotation');
+    return;
+  }
+  if (annotations.find(x => x.id === a.id)) {
+    toast('Annotation exists');
+    return;
+  }
+  // normalize minimal fields
+  const ann = {
+    id: String(a.id),
+    name: a.name || a.id || 'annotation',
+    lat: (a.lat !== undefined ? +a.lat : (a.latitude !== undefined ? +a.latitude : (a.lat === 0 ? 0 : null))),
+    lon: (a.lon !== undefined ? +a.lon : (a.longitude !== undefined ? +a.longitude : (a.lon === 0 ? 0 : null))),
+    water_score: (a.water_score !== undefined ? (isNaN(Number(a.water_score)) ? null : Number(a.water_score)) : (a.score !== undefined ? Number(a.score) : null)),
+    source: a.source || 'user',
+    timestamp: a.timestamp || new Date().toISOString(),
+    comments: Array.isArray(a.comments) ? a.comments.slice() : []
+  };
+  annotations.push(ann);
+  saveLocalAnnotations();
+  toast('Annotation saved');
+}
+
+// Delete annotation by id
+function deleteAnnotation(id) {
+  annotations = annotations.filter(x => x.id !== id);
+  saveLocalAnnotations();
+  toast('Annotation removed');
+}
+
+// Highlight annotation/feature on the map (red flash). Uses markerMap if available.
+function highlightAnnotationOnMap(id, durationMs = 2400) {
+  if (!id) return;
+  try {
+    // if there's an existing marker circle for that feature
+    const existing = (typeof markerMap !== 'undefined' && markerMap && markerMap[id]) ? markerMap[id] : null;
+    if (existing) {
+      // Save original style props
+      const orig = {
+        color: existing.options.color,
+        fillColor: existing.options.fillColor,
+        weight: existing.options.weight,
+        fillOpacity: existing.options.fillOpacity
+      };
+      // Apply highlight
+      existing.setStyle({ color: '#ff2d2d', fillColor: '#ff6b6b', weight: 3, fillOpacity: 1.0 });
+      if (existing.bringToFront) existing.bringToFront();
+      // restore after delay
+      setTimeout(() => {
+        try { if (markerMap && markerMap[id]) markerMap[id].setStyle(orig); } catch (e) { /* ignore */ }
+      }, durationMs);
+      return;
+    }
+
+    // fallback: place a temporary red ring (meters). If diameter present use quarter-scale for radius.
+    const f = (typeof featureIndex !== 'undefined' && featureIndex && featureIndex[id]) ? featureIndex[id] : null;
+    if (f && f.lat !== undefined && f.lon !== undefined) {
+      const radiusMeters = Math.max(1200, (f.diameter_m ? (f.diameter_m / 4) : 2000));
+      const tmp = L.circle([f.lat, f.lon], { radius: radiusMeters, color: '#ff2d2d', weight: 3, fill: false, interactive: false });
+      tmp.addTo(map);
+      if (tmp.bringToFront) tmp.bringToFront();
+      setTimeout(() => { try { tmp.remove(); } catch (e) { /* ignore */ } }, durationMs);
+      return;
+    }
+  } catch (err) {
+    console.warn('highlightAnnotationOnMap error', err);
+  }
+}
+
+// Render annotation list in sidebar; wires buttons and row clicks, highlights and opens feature details.
+function renderAnnotationsList() {
+  const el = $('annotationsList');
+  if (!el) return;
+  // header when empty
+  if (!annotations || !annotations.length) {
+    el.innerHTML = `<div class="muted" style="padding:10px">No annotations yet</div>`;
+    return;
+  }
+
+  // Build DOM nodes for each annotation to allow event wiring easily
+  el.innerHTML = ''; // clear
+  annotations.forEach((a) => {
+    const safeId = encodeURIComponent(String(a.id));
+    const row = document.createElement('div');
+    row.className = 'annotation-row';
+    row.id = `ann-row-${safeId}`;
+    row.style = 'padding:8px;border-radius:8px;display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;background:rgba(255,255,255,0.01)';
+
+    const left = document.createElement('div');
+    left.style = 'flex:1;min-width:0';
+    const title = document.createElement('div');
+    title.style = 'font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    title.textContent = a.name || a.id;
+    const meta = document.createElement('div');
+    meta.className = 'muted';
+    meta.style = 'font-size:12px;margin-top:4px';
+    const latstr = (a.lat || a.lat === 0) ? a.lat.toFixed(4) : '';
+    const lonstr = (a.lon || a.lon === 0) ? a.lon.toFixed(4) : '';
+    meta.textContent = `${latstr}${latstr ? ', ' : ''}${lonstr} • ${formatScore(a.water_score)}`;
+
+    left.appendChild(title);
+    left.appendChild(meta);
+
+    const right = document.createElement('div');
+    right.style = 'display:flex;gap:6px;align-items:center';
+    const zoomBtn = document.createElement('button');
+    zoomBtn.className = 'btn small';
+    zoomBtn.setAttribute('data-act', 'zoom');
+    zoomBtn.setAttribute('data-id', a.id);
+    zoomBtn.textContent = 'Zoom';
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn small ghost';
+    delBtn.setAttribute('data-act', 'del');
+    delBtn.setAttribute('data-id', a.id);
+    delBtn.textContent = 'Delete';
+
+    right.appendChild(zoomBtn);
+    right.appendChild(delBtn);
+
+    row.appendChild(left);
+    row.appendChild(right);
+    el.appendChild(row);
+
+    // Row click: open feature details (if present) and highlight
+    row.addEventListener('click', (ev) => {
+      // avoid reacting if the click was on a button (button handlers will manage)
+      if (ev.target && (ev.target.tagName === 'BUTTON' || ev.target.closest('button'))) return;
+      // open feature details if exists
+      if (typeof openFeature === 'function' && featureIndex && featureIndex[a.id]) {
+        openFeature(a.id);
+      }
+      // fly / set view and highlight
+      if (a.lat !== undefined && a.lon !== undefined) {
+        map.setView([a.lat, a.lon], Math.max(5, map.getZoom()));
+        highlightAnnotationOnMap(a.id, 2600);
+      }
+    });
+
+    // wire buttons
+    zoomBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (a.lat !== undefined && a.lon !== undefined) {
+        map.setView([a.lat, a.lon], Math.max(5, map.getZoom()));
+        highlightAnnotationOnMap(a.id, 2600);
+      }
+    });
+    delBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      deleteAnnotation(a.id);
+    });
   });
 }
+
 function exportAnnotations(){
   if(!annotations.length){ toast('No annotations to export'); return; }
   const feats = annotations.map(a => ({ type:'Feature', properties:{ id:a.id, name:a.name, water_score:a.water_score, source:a.source, timestamp:a.timestamp, comments:a.comments||[] }, geometry:{ type:'Point', coordinates:[a.lon, a.lat] } }));
@@ -745,6 +901,41 @@ function highlightMarker(id){
   } catch(e){ /* ignore */ }
 }
 
+// Highlight a feature/annotation on the map visually (red flash).
+// id: feature id (string). durationMs: how long to keep highlight (ms).
+function highlightAnnotationOnMap(id, durationMs = 2200) {
+  if (!id) return;
+  // try to find an existing marker (circleMarker added during indexing)
+  try {
+    const existing = markerMap && markerMap[id];
+    if (existing) {
+      // Save original style
+      const original = { color: existing.options.color, fillColor: existing.options.fillColor, weight: existing.options.weight, fillOpacity: existing.options.fillOpacity };
+      // Set highlight style
+      existing.setStyle({ color: '#ff2d2d', fillColor: '#ff6b6b', weight: 3, fillOpacity: 1.0 });
+      // Bring to front
+      if (existing.bringToFront) existing.bringToFront();
+      // After timeout, restore style if marker still exists
+      setTimeout(() => {
+        if (markerMap && markerMap[id]) markerMap[id].setStyle(original);
+      }, durationMs);
+      return;
+    }
+
+    // If no existing marker, create a temporary red ring at the feature coords (if present)
+    const f = featureIndex && featureIndex[id];
+    if (f && f.lat !== undefined && f.lon !== undefined) {
+      const tmp = L.circle([f.lat, f.lon], { radius: Math.max(1200, (f.diameter_m || 1000) / 4), color: '#ff2d2d', weight: 3, fill:false, interactive:false });
+      tmp.addTo(map);
+      // pan/zoom to center if caller requested (some callers call setView separately)
+      setTimeout(() => tmp.remove(), durationMs);
+      return;
+    }
+  } catch (e) {
+    console.warn('highlightAnnotationOnMap error', e);
+  }
+}
+
 /* --------------- Suggestions / UI / Search --------------- */
 function wireUI(){
   const sBtn = $('searchBtn'); if(sBtn) sBtn.onclick = doSearch;
@@ -790,6 +981,7 @@ function scoreToColor(s){
 }
 
 /* End of file */
+
 
 
 
