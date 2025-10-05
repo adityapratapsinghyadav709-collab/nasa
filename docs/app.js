@@ -430,26 +430,89 @@ async function loadSuggestions(){
     console.warn('Could not load suggestions', e);
   }
 }
-function showSuggestions(){
-  suggestionsLayer.clearLayers();
-  if(!SUGGESTIONS || !SUGGESTIONS.length){ toast('No suggestions available.'); return; }
-  for(const s of SUGGESTIONS){
-    // tolerant lat/lon keys
-    const lat = (s.lat !== undefined ? +s.lat : (s.latitude !== undefined ? +s.latitude : null));
-    const lon = (s.lon !== undefined ? +s.lon : (s.longitude !== undefined ? +s.longitude : null));
-    if(lat===null || lon===null) continue;
-    const m = L.circleMarker([lat, lon], { radius:12, color:'#ff7a00', weight:2, fillOpacity:0.35 });
-    m.bindPopup(`<b>${escapeHtml(s.name || s.id || 'candidate')}</b><br/>score: ${formatScore(s.water_score)}<br/><button class="accept-sugg btn small">Accept</button>`);
-    m.on('popupopen', e => {
-      setTimeout(()=> {
-        const el = e.popup.getElement(); if(!el) return;
-        const btn = el.querySelector('.accept-sugg'); if(btn) btn.onclick = ()=> { acceptSuggestion(s); e.popup.remove(); };
-      }, 20);
-    });
-    suggestionsLayer.addLayer(m);
+/* ------------------- Suggestion Display ------------------- */
+function showSuggestions() {
+  if (!suggestions || !suggestions.length) {
+    toast("No suggestions available");
+    return;
   }
-  toast(`Displayed ${SUGGESTIONS.length} suggestions`);
+
+  // Remove any existing suggestion layers
+  if (window.suggestionLayerGroup) {
+    map.removeLayer(window.suggestionLayerGroup);
+  }
+
+  const clusterGroup = L.markerClusterGroup({
+    showCoverageOnHover: false,
+    spiderfyOnMaxZoom: true,
+    maxClusterRadius: 40
+  });
+
+  // For each suggestion in suggestions.json
+  suggestions.forEach(s => {
+    const lat = s.lat, lon = s.lon;
+    if (isNaN(lat) || isNaN(lon)) return;
+
+    // Circle marker style for suggestions
+    const marker = L.circleMarker([lat, lon], {
+      radius: 6,
+      color: "#FFA500",
+      fillColor: "#FFA500",
+      fillOpacity: 0.7,
+      weight: 1,
+      className: "suggestion-marker"
+    });
+
+    // Smooth pulsing animation
+    const pulse = document.createElement("style");
+    pulse.textContent = `
+      .leaflet-interactive.suggestion-marker {
+        animation: pulse-suggest 1.5s infinite;
+      }
+      @keyframes pulse-suggest {
+        0% { stroke-width: 1px; opacity: 1; }
+        50% { stroke-width: 3px; opacity: 0.4; }
+        100% { stroke-width: 1px; opacity: 1; }
+      }`;
+    document.head.appendChild(pulse);
+
+    const props = s.components || {};
+    const popupHTML = `
+      <b>Suggested Crater:</b> ${s.name || s.id}<br>
+      <b>Diameter:</b> ${s.diameter_m ? (s.diameter_m > 1000 ? (s.diameter_m/1000).toFixed(2)+' km' : s.diameter_m+' m') : '—'}<br>
+      <b>Water Score:</b> ${s.water_score ? s.water_score.toFixed(2) : '—'}<br>
+      <b>PSR:</b> ${props.psr ? 'Yes' : 'No'}<br>
+      <div style="margin-top:8px;text-align:center">
+        <button id="accept-${s.id}" class="btn-accept">Accept</button>
+        <button id="dismiss-${s.id}" class="btn-dismiss">Dismiss</button>
+      </div>
+    `;
+
+    marker.bindPopup(popupHTML);
+
+    marker.on("popupopen", () => {
+      document.getElementById(`accept-${s.id}`).onclick = () => {
+        addAnnotation(s);
+        marker.setStyle({ color: "#00ff99", fillColor: "#00ff99", fillOpacity: 0.7 });
+        marker.closePopup();
+        toast(`Accepted ${s.name || s.id}`);
+      };
+      document.getElementById(`dismiss-${s.id}`).onclick = () => {
+        map.removeLayer(marker);
+        toast(`Dismissed ${s.name || s.id}`);
+      };
+    });
+
+    clusterGroup.addLayer(marker);
+  });
+
+  window.suggestionLayerGroup = clusterGroup;
+  map.addLayer(clusterGroup);
+
+  console.log(`Suggestions displayed: ${suggestions.length}`);
+  toast(`${suggestions.length} suggestions displayed`);
 }
+
 function acceptSuggestion(s){
   const lat = (s.lat!==undefined?+s.lat:(s.latitude!==undefined?+s.latitude:null));
   const lon = (s.lon!==undefined?+s.lon:(s.longitude!==undefined?+s.longitude:null));
@@ -669,5 +732,6 @@ function scoreToColor(s){
 }
 
 /* End of file */
+
 
 
