@@ -1,186 +1,228 @@
-/* app.js — EmbiggenEye (robust version)
- - Requires: index.html contains correct IDs:
-   searchInput, searchBtn, suggestBtn, exportBtn, annotationsList, featureDetails, loader, toast, map
- - Requires: add <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script> BEFORE this script in index.html
- - Behavior:
-   - Loads features parts and suggestions
-   - Loads PSR geojson and uses turf.booleanPointInPolygon for psr_overlap
-   - Computes/normalizes water_score with fallbacks
-   - Marker clustering, stable markers at all zooms (uses CircleMarker)
-   - Suggest accept -> annotation, can add comment, save in localStorage
-   - Export annotations -> GeoJSON (includes comments)
+/* app.js — EmbiggenEye final robust frontend
+   - Paste this into docs/app.js
+   - Requires: Leaflet + MarkerCluster (index.html already loads)
+   - Optional but recommended: Turf loaded BEFORE this script for robust geo ops
+   - Features:
+     - robust tile init with maxNativeZoom and transparent error tile
+     - loads features parts, suggestions, PSR
+     - computes PSR overlap (turf.booleanPointInPolygon) or bbox fallback
+     - compute normalized water_score with reweighted components & small floor
+     - circle markers + clustering (visible at all zooms)
+     - comment mode: toggle button -> click map to comment (attached to feature if near)
+     - feature details panel with comments list & add-comment box
+     - accept/annotate, annotation export with comments
+     - search & permalink support
 */
 
-const TILE_URL = './tiles/layer_vis/{z}/{x}/{y}.png';
-const FEATURE_PARTS = ['./features_part1.json','./features_part2.json','./features_part3.json'];
-const SUGGESTIONS_URL = './suggestions.json';
-const PSR_URL = './static/psr.geojson';
-const FALLBACK_IMAGE = './static/fallback.png';
+///// ----------------- Configuration -----------------
+const CONFIG = {
+  TILE_URL: './tiles/layer_vis/{z}/{x}/{y}.png',
+  FEATURE_PARTS: ['./features_part1.json','./features_part2.json','./features_part3.json'],
+  SUGGESTIONS_URL: './suggestions.json',
+  PSR_URL: './static/psr.geojson',
+  FALLBACK_IMAGE: './static/fallback.png',
+  TRANSPARENT_PNG: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=',
+  MAX_TILE_ZOOM: 5,      // change to highest zoom you generated (0..5 typical)
+  MIN_TILE_ZOOM: 0,
+  MAP_MAX_ZOOM: 5,
+  COMMENT_NEARBY_KM: 10, // if click within this (km) attach to nearest crater (uses turf distance if available)
+  ANNOTATIONS_LS_KEY: 'embiggen_annotations_v1',
+  COMMENTS_LS_KEY: 'embiggen_comments_v1'
+};
 
-const DEFAULT_CENTER = [-88.0, 0.0];
-const DEFAULT_ZOOM = 2;
-const MIN_ZOOM = 0;
-const MAX_ZOOM = 5; // five demo levels: 0..5
-
-const LS_KEY = 'embiggen_annotations_v1';
-
-function $(id){ return document.getElementById(id); }
-function toast(msg, t=2500){ const el=$('toast'); if(!el) return console.log(msg); el.textContent=msg; el.classList.add('visible'); setTimeout(()=>el.classList.remove('visible'), t); }
-function showLoader(txt='Loading...'){ const l=$('loader'); if(l){ l.style.display='block'; l.textContent=txt; } }
+///// ----------------- Utilities -----------------
+const $ = id => document.getElementById(id);
+function toast(msg, ms=2200){ const t=$('toast'); if(!t) return console.log('TOAST:',msg); t.textContent=msg; t.classList.add('visible'); setTimeout(()=>t.classList.remove('visible'), ms); }
+function showLoader(txt='Loading…'){ const l=$('loader'); if(l){ l.style.display='block'; l.textContent=txt; } }
 function hideLoader(){ const l=$('loader'); if(l) l.style.display='none'; }
-async function safeJsonFetch(url){ const res = await fetch(url); if(!res.ok) throw new Error(`${url} -> ${res.status}`); return res.json(); }
-
-function scoreToColor(s){
-  if (s===null || s===undefined || isNaN(s)) return '#7f8c8d'; // gray for unknown
-  const v = Math.max(0, Math.min(1, +s));
-  const r = Math.round(255 * Math.min(1, Math.max(0, (v-0.5)*2)));
-  const b = Math.round(255 * Math.min(1, Math.max(0, (0.5-v)*2)));
-  const g = Math.round(255 * (1 - Math.abs(v-0.5)*2));
-  return `rgb(${r},${g},${b})`;
+async function safeJsonFetch(url){
+  const r = await fetch(url); if(!r.ok) throw new Error(`${url} -> ${r.status}`); return r.json();
+}
+function escapeHtml(s){ if(!s && s!==0) return ''; return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+function formatDiameter(d_m){
+  if(d_m === null || d_m === undefined) return '—';
+  d_m = +d_m;
+  if (d_m >= 1000) return `${(d_m/1000).toFixed(2)} km`;
+  return `${Math.round(d_m)} m`;
+}
+function formatScore(s){
+  if (s === null || s === undefined || isNaN(s)) return '—';
+  // show percent-like or 0.xx
+  return Number(s).toFixed(3);
 }
 
-/* Permalink handling */
-function setPermalink(map, layerName, selectedId){
-  const c = map.getCenter();
-  const z = map.getZoom();
-  location.hash = [z.toString(), c.lat.toFixed(6), c.lng.toFixed(6), layerName||'vis', selectedId||''].join('/');
-}
-function readPermalink(){
-  if(!location.hash) return null;
-  const parts = location.hash.replace('#','').split('/');
-  if(parts.length < 4) return null;
-  return { z: parseInt(parts[0],10), lat: parseFloat(parts[1]), lng: parseFloat(parts[2]), layer: parts[3], selectedId: parts[4]||null };
-}
-
-/* globals and layers */
+///// ----------------- Globals -----------------
 let map;
-let tileLayer = null;
-let fallbackOverlay = null;
-let clusterLayer;
+let baseTileLayer = null;
+let cluster;
 let suggestionsLayer;
-let featureIndex = {}; // id -> feature obj
-let featureLayerMap = {}; // id -> marker
-let annotations = []; // persisted local annotations
+let featureIndex = {};   // id -> feature object
+let markerMap = {};      // id -> circleMarker
+let annotations = [];    // saved annotation objects
+let commentsStore = { featureComments: {}, freeComments: [] };
 let PSR_GEOJSON = null;
-window._SUGGESTIONS = null;
+let SUGGESTIONS = null;
+let commentModeActive = false;
+let commentModeButton = null;
 
-/* Init map and dataset loads */
-async function init(){
-  showLoader('Initializing map...');
-  map = L.map('map', { preferCanvas:true, worldCopyJump:false, minZoom:MIN_ZOOM, maxZoom:MAX_ZOOM }).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
-
-  // Defensive tile availability test
-  let tilesAvailable = false;
+///// ----------------- Init -----------------
+document.addEventListener('DOMContentLoaded', async () => {
+  showLoader('Starting map…');
   try {
-    const testUrl = TILE_URL.replace('{z}','0').replace('{x}','0').replace('{y}','0');
-    const r = await fetch(testUrl, { method:'HEAD' });
-    if (r.ok) tilesAvailable = true;
-    else {
-      // try GET
-      const r2 = await fetch(testUrl);
-      tilesAvailable = r2.ok;
-    }
-  } catch(e){ tilesAvailable = false; }
-
-  if(tilesAvailable){
-    tileLayer = L.tileLayer(TILE_URL, { minZoom:MIN_ZOOM, maxZoom:MAX_ZOOM, errorTileUrl:'' });
-    tileLayer.addTo(map);
-  } else {
-    // try fallback image
-    try {
-      await new Promise((resolve, reject) => {
-        const img = new Image();
-        img.onload = resolve; img.onerror = reject;
-        img.src = FALLBACK_IMAGE;
-      });
-      const bounds = [[-180,-180],[180,180]];
-      fallbackOverlay = L.imageOverlay(FALLBACK_IMAGE, bounds).addTo(map);
-      map.fitBounds(bounds);
-      toast('Tiles missing — using fallback image.');
-    } catch(e) {
-      // show a basic grey background rectangle to make markers visible
-      const bounds = [[-180,-180],[180,180]];
-      L.rectangle(bounds, { color:'#0b1726', weight:0, fillOpacity:1 }).addTo(map);
-      map.fitBounds(bounds);
-      toast('Tiles & fallback missing — map usable, markers visible.');
-    }
+    setupMap();
+    await loadPSR();
+    const features = await loadFeaturesParts(CONFIG.FEATURE_PARTS);
+    indexFeatures(features);
+    await loadSuggestions();
+    loadLocalAnnotations();
+    loadCommentsFromStorage();
+    renderAnnotationsList();
+    createCommentModeButton(); // adds UI button for comment mode
+    wireUI();
+    normalizeAndComputeWaterScores(); // compute scores immediately (with fallbacks)
+    hideLoader();
+    toast('EmbiggenEye ready');
+  } catch(err){
+    console.error('Init failed', err);
+    hideLoader();
+    toast('Initialization error — check console');
   }
+});
 
-  clusterLayer = L.markerClusterGroup({ chunkedLoading:true, spiderfyOnMaxZoom:true });
+///// ----------------- Map + Tiles -----------------
+function setupMap(){
+  // sensible defaults
+  map = L.map('map', { preferCanvas: true, worldCopyJump: false, minZoom: CONFIG.MIN_TILE_ZOOM, maxZoom: CONFIG.MAP_MAX_ZOOM })
+          .setView([-88.0, 0.0], 2);
+
+  // robust tile init: detect tile availability (best-effort)
+  const testUrl = CONFIG.TILE_URL.replace('{z}','0').replace('{x}','0').replace('{y}','0');
+  fetch(testUrl, { method:'HEAD' }).then(res => {
+    const tilesAvailable = res.ok;
+    initTileLayer(tilesAvailable);
+  }).catch(_ => {
+    // fallback: attempt GET to check
+    fetch(testUrl).then(r => {
+      initTileLayer(r.ok);
+    }).catch(_=>{
+      initTileLayer(false);
+    });
+  });
+
+  // clustering layers
+  cluster = L.markerClusterGroup({ chunkedLoading:true, spiderfyOnMaxZoom:true });
   suggestionsLayer = L.layerGroup();
-  map.addLayer(clusterLayer);
+  map.addLayer(cluster);
   map.addLayer(suggestionsLayer);
 
-  // load PSR
-  try {
-    PSR_GEOJSON = await safeJsonFetch(PSR_URL);
-    L.geoJSON(PSR_GEOJSON, { style:{ color:'#7fd', weight:1, fillOpacity:0.06 } }).addTo(map);
-    console.log('PSR loaded.');
-  } catch(e){
-    console.warn('PSR not loaded:', e);
-    PSR_GEOJSON = null;
-  }
-
-  // load features
-  let features = [];
-  for(const p of FEATURE_PARTS){
-    try {
-      const part = await safeJsonFetch(p);
-      // Accept either FeatureCollection, array of Features, or plain array of objects with properties
-      if (part.type === 'FeatureCollection' && Array.isArray(part.features)) features.push(...part.features);
-      else if (Array.isArray(part)) features.push(...part);
-      else console.warn('Unknown features part format:', p);
-    } catch(e){
-      console.warn('Feature part missing:', p, e);
-    }
-  }
-  if(!features.length) toast('No features loaded — check features_part files.');
-  indexAndRenderFeatures(features);
-
-  // suggestions
-  try {
-    window._SUGGESTIONS = await safeJsonFetch(SUGGESTIONS_URL);
-    console.log('Suggestions loaded:', window._SUGGESTIONS);
-  } catch(e){
-    window._SUGGESTIONS = null;
-    console.warn('No suggestions file or failed to load.');
-  }
-
-  // load annotations from storage
-  loadAnnotations();
-  renderAnnotationsList();
-
-  // wire UI actions
-  wireUI();
-
-  // apply permalink if present
-  const pl = readPermalink();
-  if(pl){
-    try { map.setView([pl.lat, pl.lng], pl.z || DEFAULT_ZOOM); if(pl.selectedId) setTimeout(()=>openFeature(pl.selectedId),800); } catch(e){}
-  }
-
-  hideLoader();
-  // compute water_score for any entries without it (fallbacks)
-  normalizeAndComputeScores();
+  // keep permalink updated on moveend (debounced)
+  let t = null;
+  map.on('moveend', ()=> { if(t) clearTimeout(t); t = setTimeout(()=>setPermalink(null), 400); });
 }
 
-/* Load and render features */
-function indexAndRenderFeatures(featuresArray){
-  featureIndex = {};
-  featureLayerMap = {};
-  clusterLayer.clearLayers();
+function initTileLayer(tilesAvailable){
+  // clamp map zoom to match tiles
+  map.setMaxZoom(CONFIG.MAP_MAX_ZOOM);
 
-  for(const f of featuresArray){
+  if(tilesAvailable){
+    baseTileLayer = L.tileLayer(CONFIG.TILE_URL, {
+      minZoom: CONFIG.MIN_TILE_ZOOM,
+      maxZoom: CONFIG.MAP_MAX_ZOOM,
+      maxNativeZoom: CONFIG.MAX_TILE_ZOOM,
+      errorTileUrl: CONFIG.TRANSPARENT_PNG,
+      noWrap: true,
+      keepBuffer: 2
+    });
+    baseTileLayer.addTo(map);
+
+    // detect tile errors and show a single toast once
+    let hadError = false;
+    baseTileLayer.on('tileerror', function(e){
+      if(!hadError){ hadError = true; toast('Some tiles failed to load — using available tiles.'); }
+      console.warn('Tile error', e);
+    });
+
+    // ensure zoom snapping when user tries to exceed
+    map.on('zoomend', ()=> {
+      if(map.getZoom() > CONFIG.MAX_TILE_ZOOM){
+        map.setZoom(CONFIG.MAX_TILE_ZOOM);
+        toast(`Max zoom is ${CONFIG.MAX_TILE_ZOOM} (tiles available up to that).`);
+      }
+    });
+
+  } else {
+    // attempt fallback image overlay
+    const fallback = CONFIG.FALLBACK_IMAGE;
+    const img = new Image();
+    img.onload = ()=> {
+      // assume generic bounds — markers use lat/lon so this is just a background
+      const bounds = [[-180,-180],[180,180]];
+      L.imageOverlay(fallback, bounds).addTo(map);
+      map.fitBounds(bounds);
+      toast('Tiles not found — using fallback image.');
+    };
+    img.onerror = ()=> {
+      // fallback to a plain background rectangle so markers show
+      const bounds = [[-180,-180],[180,180]];
+      L.rectangle(bounds, { color:'#071426', weight:0, fillOpacity:1 }).addTo(map);
+      map.fitBounds(bounds);
+      toast('No tiles or fallback; map usable with markers only.');
+    };
+    img.src = fallback;
+  }
+}
+
+///// ----------------- Load PSR -----------------
+async function loadPSR(){
+  try {
+    const data = await safeJsonFetch(CONFIG.PSR_URL);
+    PSR_GEOJSON = data;
+    L.geoJSON(PSR_GEOJSON, { style: { color: '#7fd', weight:1, fillOpacity:0.06 } }).addTo(map);
+    console.log('PSR loaded');
+  } catch(err){
+    PSR_GEOJSON = null;
+    console.warn('PSR not found or failed to load', err);
+  }
+}
+
+///// ----------------- Features load / index -----------------
+async function loadFeaturesParts(parts){
+  showLoader('Loading crater catalog...');
+  const collected = [];
+  for(const p of parts){
+    try {
+      const json = await safeJsonFetch(p);
+      if(json.type === 'FeatureCollection' && Array.isArray(json.features)) collected.push(...json.features);
+      else if(Array.isArray(json)) collected.push(...json);
+      else if(json.type === 'Feature' && json.properties) collected.push(json);
+      else {
+        console.warn('Unknown feature part format for', p);
+      }
+    } catch(err){
+      console.warn('Feature part missing or invalid:', p, err);
+    }
+  }
+  hideLoader();
+  return collected;
+}
+
+function indexFeatures(features){
+  featureIndex = {};
+  cluster.clearLayers();
+  markerMap = {};
+
+  for(const item of features){
+    // accept either GeoJSON Feature or plain object with lon/lat in props
     let props = null, geom = null;
-    if(f.type === 'Feature' && f.properties){
-      props = f.properties; geom = f.geometry;
-    } else if (f.properties){
-      props = f.properties; geom = f.geometry;
+    if(item.type === 'Feature' && item.properties){
+      props = item.properties;
+      geom = item.geometry;
     } else {
-      props = f; geom = null;
+      props = item;
+      geom = item.geometry || null;
     }
 
-    // resolve coords
+    // find coords
     let lon = null, lat = null;
     if(geom && geom.type === 'Point' && Array.isArray(geom.coordinates)){
       [lon, lat] = geom.coordinates;
@@ -189,64 +231,393 @@ function indexAndRenderFeatures(featuresArray){
     } else if (props.LON && props.LAT){
       lon = +props.LON; lat = +props.LAT;
     } else {
-      // skip feature without coordinates
+      // skip if no coords
       continue;
     }
 
-    const id = props.id || props.CRATER_ID || props.name || (`f_${Object.keys(featureIndex).length+1}`);
-    const diameter_m = (props.diameter_m || (props.diameter_km ? +props.diameter_km*1000 : null)) || null;
-    const water_score = (props.water_score === null || props.water_score === undefined) ? null : +props.water_score;
+    // id and fields
+    const id = (props.id || props.CRATER_ID || props.name || `fid_${Object.keys(featureIndex).length+1}`).toString();
+    const diameter_m = props.diameter_m || (props.diameter_km ? +props.diameter_km * 1000 : (props.DIAMETER ? +props.DIAMETER : null)) || null;
+    // parse numeric components if provided
     const spectral_mean = (props.spectral_mean === null || props.spectral_mean === undefined) ? null : +props.spectral_mean;
     const hydrogen_mean = (props.hydrogen_mean === null || props.hydrogen_mean === undefined) ? null : +props.hydrogen_mean;
     const depth_metric = (props.depth_metric === null || props.depth_metric === undefined) ? null : +props.depth_metric;
-    const psr_overlap = !!props.psr_overlap || !!props.PSR || !!props.psr;
+    // psr_overlap property maybe present but we'll recompute properly later
+    const psr_overlap_prop = !!props.psr_overlap || !!props.PSR || !!props.psr;
 
-    // store
-    const fo = { id, name: props.name||id, lon:+lon, lat:+lat, diameter_m, water_score, spectral_mean, hydrogen_mean, depth_metric, psr_overlap, raw:props };
+    const fo = { id, name: props.name || id, lon:+lon, lat:+lat, diameter_m, spectral_mean, hydrogen_mean, depth_metric, psr_overlap: psr_overlap_prop, water_score: (props.water_score===undefined?null:(props.water_score===null?null:+props.water_score)), raw: props };
     featureIndex[id] = fo;
   }
 
-  // create markers
+  // create markers for all features
   Object.values(featureIndex).forEach(f => addFeatureMarker(f));
-  toast(`Loaded ${Object.keys(featureIndex).length} features`);
+  toast(`Loaded ${Object.keys(featureIndex).length} features.`);
 }
 
 function addFeatureMarker(f){
   const latlng = [f.lat, f.lon];
-  // pixel-sized marker scaling: CircleMarker keeps pixel radius constant across zooms
-  const baseRadius = f.diameter_m ? Math.max(6, Math.min(34, Math.log10(f.diameter_m + 1) * 3.5)) : 8;
+  // radius: depends on diameter but keep in pixel space (circleMarker)
+  const radius = f.diameter_m ? Math.max(6, Math.min(36, Math.log10(f.diameter_m + 1) * 3.5)) : 8;
   const color = scoreToColor(f.water_score);
-  const marker = L.circleMarker(latlng, { radius: baseRadius, color, weight:1.6, fillOpacity:0.7 });
+  const marker = L.circleMarker(latlng, { radius, color, weight:1.6, fillOpacity:0.72 });
   marker.featureId = f.id;
-  marker.on('click', ()=> {
-    openFeature(f.id);
-    setPermalink(map, 'vis', f.id);
-  });
-  marker.bindPopup(popupHtml(f), { maxWidth:320 });
-  clusterLayer.addLayer(marker);
-  featureLayerMap[f.id] = marker;
+  marker.on('click', () => { openFeature(f.id); setPermalink(f.id); });
+  marker.bindPopup(popupHtml(f), { maxWidth: 320 });
+  cluster.addLayer(marker);
+  markerMap[f.id] = marker;
 }
 
-/* Popup html */
-function nullable(v){ return (v===null||v===undefined)?'<span class="empty">N/A</span>': Number(v).toFixed(3); }
 function popupHtml(f){
-  return `<div class="popup-card">
-    <h4>${escapeHtml(f.name)}</h4>
-    <table class="popup-table">
-      <tr><td><b>ID</b></td><td>${escapeHtml(f.id)}</td></tr>
-      <tr><td><b>Lat/Lon</b></td><td>${f.lat.toFixed(6)} / ${f.lon.toFixed(6)}</td></tr>
-      <tr><td><b>Diameter (m)</b></td><td>${f.diameter_m?Math.round(f.diameter_m):'N/A'}</td></tr>
-      <tr><td><b>PSR</b></td><td>${f.psr_overlap? 'Yes' : 'No'}</td></tr>
-      <tr><td><b>Spectral</b></td><td>${nullable(f.spectral_mean)}</td></tr>
-      <tr><td><b>Hydrogen</b></td><td>${nullable(f.hydrogen_mean)}</td></tr>
-      <tr><td><b>Depth metric</b></td><td>${nullable(f.depth_metric)}</td></tr>
-      <tr><td><b>Water score</b></td><td>${(f.water_score===null||f.water_score===undefined)?'<span class="empty">N/A</span>':Number(f.water_score).toFixed(3)}</td></tr>
-    </table>
-  </div>`;
+  return `
+    <div class="popup-card">
+      <h4>${escapeHtml(f.name)}</h4>
+      <table class="popup-table">
+        <tr><td><b>ID</b></td><td>${escapeHtml(f.id)}</td></tr>
+        <tr><td><b>Lat / Lon</b></td><td>${f.lat.toFixed(6)} / ${f.lon.toFixed(6)}</td></tr>
+        <tr><td><b>Diameter</b></td><td>${formatDiameter(f.diameter_m)}</td></tr>
+        <tr><td><b>PSR</b></td><td>${f.psr_overlap ? 'Yes' : 'No'}</td></tr>
+        <tr><td><b>Spectral</b></td><td>${f.spectral_mean===null? '—' : Number(f.spectral_mean).toFixed(3)}</td></tr>
+        <tr><td><b>Hydrogen</b></td><td>${f.hydrogen_mean===null? '—' : Number(f.hydrogen_mean).toFixed(3)}</td></tr>
+        <tr><td><b>Depth</b></td><td>${f.depth_metric===null? '—' : Number(f.depth_metric).toFixed(3)}</td></tr>
+        <tr><td><b>Water score</b></td><td>${formatScore(f.water_score)}</td></tr>
+      </table>
+    </div>
+  `;
 }
-function escapeHtml(s){ if(!s && s!==0) return ''; return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
 
-/* Open feature details in right panel and allow comments / accept annotation */
+///// ----------------- PSR overlap check (turf or bbox fallback) -----------------
+function featurePointInPsr(f){
+  if(!PSR_GEOJSON) return false;
+  try {
+    if(window.turf && typeof turf.booleanPointInPolygon === 'function'){
+      const pt = turf.point([f.lon, f.lat]);
+      for(const feat of (PSR_GEOJSON.features||[])){
+        if(turf.booleanPointInPolygon(pt, feat)) return true;
+      }
+      return false;
+    } else {
+      // fallback bbox containment: compute feature bbox if necessary
+      const p_lon = f.lon, p_lat = f.lat;
+      for(const feat of (PSR_GEOJSON.features||[])){
+        if(feat.bbox){
+          const [minx,miny,maxx,maxy] = feat.bbox;
+          if(p_lon >= minx && p_lon <= maxx && p_lat >= miny && p_lat <= maxy) return true;
+        } else if (feat.geometry){
+          // compute bbox from geometry coords
+          const coordsFlat = [];
+          const collect = (arr) => {
+            if(typeof arr[0] === 'number') coordsFlat.push(arr);
+            else arr.forEach(a=>collect(a));
+          };
+          collect(feat.geometry.coordinates);
+          const xs = coordsFlat.map(c=>c[0]), ys = coordsFlat.map(c=>c[1]);
+          const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
+          if(p_lon >= minx && p_lon <= maxx && p_lat >= miny && p_lat <= maxy) return true;
+        }
+      }
+      return false;
+    }
+  } catch(e){
+    console.warn('PSR check error: ', e);
+    return false;
+  }
+}
+
+///// ----------------- Water-score computation & normalization -----------------
+function normalizeAndComputeWaterScores(){
+  // gather arrays for normalization
+  const features = Object.values(featureIndex);
+  if(!features.length) return;
+
+  // ensure psr_overlap recomputed from PSR file if present
+  features.forEach(f => {
+    if(PSR_GEOJSON) {
+      try { f.psr_overlap = featurePointInPsr(f); } catch(e){ /* ignore */ }
+    }
+  });
+
+  const specVals = features.map(f => f.spectral_mean).filter(v => v !== null && v !== undefined);
+  const hydroVals = features.map(f => f.hydrogen_mean).filter(v => v !== null && v !== undefined);
+  const depthVals = features.map(f => f.depth_metric).filter(v => v !== null && v !== undefined);
+
+  const specMin = specVals.length ? Math.min(...specVals) : 0;
+  const specMax = specVals.length ? Math.max(...specVals) : 1;
+  const hydroMin = hydroVals.length ? Math.min(...hydroVals) : 0;
+  const hydroMax = hydroVals.length ? Math.max(...hydroVals) : 1;
+  const depthMin = depthVals.length ? Math.min(...depthVals) : 0;
+  const depthMax = depthVals.length ? Math.max(...depthVals) : 1;
+
+  const baseWeights = { psr: 0.4, spec: 0.3, hydro: 0.2, depth: 0.1 };
+  const SCORE_FLOOR = 0.02; // small floor — never show zero
+
+  for(const f of features){
+    // if already has a valid water_score (non-null), keep it but update color
+    if(f.water_score !== null && f.water_score !== undefined && !isNaN(f.water_score)){
+      const m = markerMap[f.id];
+      if(m) m.setStyle({ color: scoreToColor(f.water_score) });
+      continue;
+    }
+
+    // compute normalized component values
+    const comps = [];
+    // PSR is always available (we computed above), value 0 or 1
+    comps.push({k:'psr', avail:true, val: f.psr_overlap ? 1 : 0, w: baseWeights.psr});
+    // spectral
+    if(f.spectral_mean !== null && f.spectral_mean !== undefined){
+      const v = (f.spectral_mean - specMin) / (specMax - specMin + 1e-12);
+      comps.push({k:'spec', avail:true, val: v, w: baseWeights.spec});
+    } else {
+      comps.push({k:'spec', avail:false, val: 0, w: baseWeights.spec});
+    }
+    // hydrogen
+    if(f.hydrogen_mean !== null && f.hydrogen_mean !== undefined){
+      const v = (f.hydrogen_mean - hydroMin) / (hydroMax - hydroMin + 1e-12);
+      comps.push({k:'hydro', avail:true, val: v, w: baseWeights.hydro});
+    } else {
+      comps.push({k:'hydro', avail:false, val: 0, w: baseWeights.hydro});
+    }
+    // depth
+    if(f.depth_metric !== null && f.depth_metric !== undefined){
+      const v = (f.depth_metric - depthMin) / (depthMax - depthMin + 1e-12);
+      comps.push({k:'depth', avail:true, val: v, w: baseWeights.depth});
+    } else {
+      comps.push({k:'depth', avail:false, val: 0, w: baseWeights.depth});
+    }
+
+    // reweight to available comps
+    let totalW = 0;
+    comps.forEach(c => { if(c.avail || c.k === 'psr') totalW += c.w; else c.w = 0; });
+    if(totalW <= 0) {
+      f.water_score = SCORE_FLOOR;
+    } else {
+      comps.forEach(c => c.w = c.w / totalW);
+      const score = comps.reduce((sum, c) => sum + (c.val * c.w), 0);
+      f.water_score = Number(Math.max(score, SCORE_FLOOR).toFixed(4));
+    }
+
+    // update marker color
+    const m = markerMap[f.id];
+    if(m) m.setStyle({ color: scoreToColor(f.water_score) });
+  }
+
+  // one more pass to update popups content if open
+  Object.keys(markerMap).forEach(id => {
+    try {
+      const marker = markerMap[id];
+      if(marker && marker.getPopup && marker.isPopupOpen && marker.isPopupOpen()){
+        marker.setPopupContent(popupHtml(featureIndex[id]));
+      }
+    } catch(e){ /* ignore */ }
+  });
+}
+
+///// ----------------- Suggestions -----------------
+async function loadSuggestions(){
+  try {
+    const s = await safeJsonFetch(CONFIG.SUGGESTIONS_URL);
+    SUGGESTIONS = s;
+    console.log('Suggestions loaded');
+  } catch(e){
+    SUGGESTIONS = null;
+    console.warn('No suggestions.json or failed to load');
+  }
+}
+
+function showSuggestions(){
+  suggestionsLayer.clearLayers();
+  if(!SUGGESTIONS) { toast('No suggestions available.'); return; }
+  const list = Array.isArray(SUGGESTIONS.suggestions) ? SUGGESTIONS.suggestions : (Array.isArray(SUGGESTIONS) ? SUGGESTIONS : []);
+  if(!list.length){ toast('No suggestions present'); return; }
+  for(const s of list){
+    const latlng = [s.lat, s.lon];
+    const m = L.circleMarker(latlng, { radius: 12, color: '#ff7a00', weight:2, fillOpacity:0.35 });
+    m.bindPopup(`<b>${escapeHtml(s.name || s.id)}</b><br/>score: ${formatScore(s.water_score)}<br/><button class="accept-sugg btn small">Accept</button>`);
+    m.on('popupopen', e => {
+      setTimeout(()=> {
+        const el = e.popup.getElement();
+        if(!el) return;
+        const btn = el.querySelector('.accept-sugg');
+        if(btn) btn.onclick = ()=> { acceptSuggestion(s); e.popup.remove(); };
+      }, 20);
+    });
+    suggestionsLayer.addLayer(m);
+  }
+  toast(`Displayed ${list.length} suggestions`);
+}
+
+function acceptSuggestion(s){
+  const ann = {
+    id: s.id || `sugg_${Date.now()}`,
+    name: s.name || s.id || 'candidate',
+    lon: +s.lon, lat: +s.lat,
+    water_score: (s.water_score===undefined?null:s.water_score),
+    source: 'suggestion',
+    timestamp: new Date().toISOString(),
+    comments: []
+  };
+  addAnnotation(ann);
+}
+
+///// ----------------- Annotations (localStorage) -----------------
+function loadLocalAnnotations(){
+  try { annotations = JSON.parse(localStorage.getItem(CONFIG.ANNOTATIONS_LS_KEY) || '[]'); } catch(e){ annotations = []; }
+}
+function saveLocalAnnotations(){ localStorage.setItem(CONFIG.ANNOTATIONS_LS_KEY, JSON.stringify(annotations)); renderAnnotationsList(); }
+function addAnnotation(a){
+  if(annotations.find(x => x.id === a.id)){ toast('Annotation already exists'); return; }
+  annotations.push(a); saveLocalAnnotations(); toast('Annotation saved locally');
+}
+function deleteAnnotation(id){
+  annotations = annotations.filter(x => x.id !== id); saveLocalAnnotations(); toast('Annotation removed');
+}
+function renderAnnotationsList(){
+  const el = $('annotationsList');
+  if(!el) return;
+  if(!annotations.length){ el.innerHTML = '<div class="muted">None yet</div>'; return; }
+  el.innerHTML = annotations.map(a => `
+    <div style="padding:6px;border-radius:8px;display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-weight:700">${escapeHtml(a.name)}</div>
+        <div class="muted" style="font-size:12px">${a.lat? a.lat.toFixed(4):''}, ${a.lon? a.lon.toFixed(4):''} • ${formatScore(a.water_score)}</div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn small" data-act="zoom" data-id="${escapeHtml(a.id)}">Zoom</button>
+        <button class="btn small ghost" data-act="del" data-id="${escapeHtml(a.id)}">Delete</button>
+      </div>
+    </div>`).join('');
+  el.querySelectorAll('button[data-act]').forEach(b => {
+    const act = b.getAttribute('data-act'), id = b.getAttribute('data-id');
+    b.onclick = () => {
+      if(act === 'zoom'){ const a = annotations.find(x => x.id === id); if(a && a.lat && a.lon) map.setView([a.lat, a.lon], Math.max(4, map.getZoom())); }
+      if(act === 'del'){ deleteAnnotation(id); }
+    };
+  });
+}
+
+///// ----------------- Export (annotations + comments) -----------------
+function exportAnnotations(){
+  if(!annotations.length){ toast('No annotations to export'); return; }
+  const features = annotations.map(a => ({
+    type:'Feature',
+    properties: { id: a.id, name: a.name, water_score: a.water_score, source: a.source, timestamp: a.timestamp, comments: a.comments || [] },
+    geometry: { type:'Point', coordinates: [a.lon, a.lat] }
+  }));
+  const fc = { type:'FeatureCollection', features };
+  const blob = new Blob([JSON.stringify(fc, null, 2)], { type:'application/geo+json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'annotations.geojson'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  toast('Exported annotations.geojson');
+}
+
+///// ----------------- Comments storage & functions -----------------
+function loadCommentsFromStorage(){
+  try { commentsStore = JSON.parse(localStorage.getItem(CONFIG.COMMENTS_LS_KEY) || '{"featureComments":{},"freeComments":[]}'); } catch(e){ commentsStore = { featureComments:{}, freeComments:[] }; }
+}
+function saveCommentsToStorage(){ localStorage.setItem(CONFIG.COMMENTS_LS_KEY, JSON.stringify(commentsStore)); }
+function addCommentToFeature(featureId, text){
+  if(!featureId) return;
+  commentsStore.featureComments[featureId] = commentsStore.featureComments[featureId] || [];
+  commentsStore.featureComments[featureId].push({ text, ts: new Date().toISOString() });
+  saveCommentsToStorage();
+  toast('Comment added (local)');
+  renderCommentsForFeature(featureId);
+}
+function addFreeComment(lat, lon, text){
+  commentsStore.freeComments.push({ id: `fc_${Date.now()}`, lat, lon, text, ts: new Date().toISOString() });
+  saveCommentsToStorage();
+  toast('Map comment saved (local)');
+}
+function renderCommentsForFeature(featureId){
+  const node = $('commentsList');
+  if(!node) return;
+  const list = commentsStore.featureComments[featureId] || [];
+  if(!list.length) { node.innerHTML = '<div class="muted">No comments yet</div>'; return; }
+  node.innerHTML = list.map(c => `<div style="padding:8px;border-radius:8px;background:rgba(255,255,255,0.01);margin-bottom:6px"><div>${escapeHtml(c.text)}</div><div class="muted" style="font-size:12px;margin-top:6px">${new Date(c.ts).toLocaleString()}</div></div>`).join('');
+}
+
+///// ----------------- Comment Mode (UI button + map click handling) -----------------
+function createCommentModeButton(){
+  // create a small floating button top-right
+  commentModeButton = document.createElement('button');
+  commentModeButton.id = 'commentModeBtn';
+  commentModeButton.className = 'btn ghost';
+  commentModeButton.style.position = 'absolute';
+  commentModeButton.style.right = '18px';
+  commentModeButton.style.top = '86px';
+  commentModeButton.style.zIndex = 2000;
+  commentModeButton.textContent = 'Comment';
+  document.body.appendChild(commentModeButton);
+
+  commentModeButton.onclick = () => {
+    commentModeActive = !commentModeActive;
+    commentModeButton.textContent = commentModeActive ? 'Comment: ON (click map)' : 'Comment';
+    commentModeButton.style.background = commentModeActive ? 'rgba(255,122,0,0.95)' : '';
+    map.getContainer().style.cursor = commentModeActive ? 'crosshair' : '';
+    if(commentModeActive) toast('Comment mode: click on map to leave a comment (click marker to attach to crater).');
+  };
+
+  // map click handler (only active when commentModeActive)
+  map.on('click', async (e) => {
+    if(!commentModeActive) return;
+    const { lat, lng } = e.latlng;
+    // find nearest feature using turf if available
+    let nearest = null;
+    let minKm = Infinity;
+    Object.values(featureIndex).forEach(f => {
+      try {
+        if(window.turf && typeof turf.distance === 'function'){
+          const d = turf.distance(turf.point([f.lon, f.lat]), turf.point([lng, lat]), { units: 'kilometers' });
+          if(d < minKm) { minKm = d; nearest = f; }
+        } else {
+          // simple haversine approximation not implemented — use euclidean degree approx
+          const ddeg = Math.hypot(f.lat - lat, f.lon - lng);
+          if(ddeg < minKm){ minKm = ddeg; nearest = f; }
+        }
+      } catch(e){ /* ignore */ }
+    });
+
+    // threshold to attach to crater
+    const thresholdKm = CONFIG.COMMENT_NEARBY_KM;
+    if(minKm !== Infinity && minKm <= thresholdKm && nearest){
+      // open feature and open comment box in details
+      openFeature(nearest.id);
+      // prefill comment textarea if possible
+      const ta = $('commentText');
+      if(ta){ ta.focus(); }
+      // also add suggestion to toggle off comment mode
+      commentModeActive = false; commentModeButton.textContent = 'Comment'; map.getContainer().style.cursor = '';
+      return;
+    }
+
+    // otherwise show a small popup at clicked location to enter comment
+    const popup = L.popup({ closeOnClick:false, autoClose:false, maxWidth:320 })
+      .setLatLng([lat, lng])
+      .setContent(`<div style="min-width:220px">
+        <div style="font-weight:700;margin-bottom:6px">Map comment</div>
+        <textarea id="pm_text" rows="3" style="width:100%;padding:8px;border-radius:8px;background:rgba(255,255,255,0.02);border:none;color:#e8f4ff"></textarea>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button id="pm_save" class="btn small">Save</button>
+          <button id="pm_cancel" class="btn small ghost">Cancel</button>
+        </div>
+      </div>`).openOn(map);
+
+    // wire buttons after DOM insertion
+    setTimeout(()=> {
+      const btnSave = document.getElementById('pm_save'), btnCancel = document.getElementById('pm_cancel'), ta = document.getElementById('pm_text');
+      if(btnSave) btnSave.onclick = () => {
+        const txt = (ta && ta.value || '').trim();
+        if(!txt){ toast('Type a comment'); return; }
+        addFreeComment(lat, lng, txt);
+        map.closePopup(popup);
+        commentModeActive = false; commentModeButton.textContent = 'Comment'; map.getContainer().style.cursor = '';
+      };
+      if(btnCancel) btnCancel.onclick = () => { map.closePopup(popup); commentModeActive = false; commentModeButton.textContent = 'Comment'; map.getContainer().style.cursor = ''; };
+      if(ta) ta.focus();
+    }, 50);
+  });
+}
+
+///// ----------------- Open feature details panel & comment posting -----------------
 function openFeature(id){
   const f = featureIndex[id];
   if(!f) return;
@@ -258,12 +629,12 @@ function openFeature(id){
       <table class="details-table">
         <tr><td><b>ID</b></td><td>${escapeHtml(f.id)}</td></tr>
         <tr><td><b>Lat / Lon</b></td><td>${f.lat.toFixed(6)} / ${f.lon.toFixed(6)}</td></tr>
-        <tr><td><b>Diameter (m)</b></td><td>${f.diameter_m?Math.round(f.diameter_m):'N/A'}</td></tr>
-        <tr><td><b>PSR</b></td><td>${f.psr_overlap? 'Yes':'No'}</td></tr>
-        <tr><td><b>Spectral mean</b></td><td>${nullable(f.spectral_mean)}</td></tr>
-        <tr><td><b>Hydrogen mean</b></td><td>${nullable(f.hydrogen_mean)}</td></tr>
-        <tr><td><b>Depth metric</b></td><td>${nullable(f.depth_metric)}</td></tr>
-        <tr><td><b>Water score</b></td><td>${(f.water_score===null||f.water_score===undefined)?'<span class="empty">N/A</span>':Number(f.water_score).toFixed(3)}</td></tr>
+        <tr><td><b>Diameter</b></td><td>${formatDiameter(f.diameter_m)}</td></tr>
+        <tr><td><b>PSR</b></td><td>${f.psr_overlap ? 'Yes' : 'No'}</td></tr>
+        <tr><td><b>Spectral</b></td><td>${f.spectral_mean===null? '—' : Number(f.spectral_mean).toFixed(3)}</td></tr>
+        <tr><td><b>Hydrogen</b></td><td>${f.hydrogen_mean===null? '—' : Number(f.hydrogen_mean).toFixed(3)}</td></tr>
+        <tr><td><b>Depth</b></td><td>${f.depth_metric===null? '—' : Number(f.depth_metric).toFixed(3)}</td></tr>
+        <tr><td><b>Water score</b></td><td>${formatScore(f.water_score)}</td></tr>
       </table>
 
       <div style="margin-top:10px;display:flex;gap:8px">
@@ -272,21 +643,20 @@ function openFeature(id){
       </div>
 
       <div style="margin-top:12px">
-        <label style="font-weight:700;margin-bottom:6px;display:block">Comments & discussion</label>
-        <textarea id="commentText" rows="3" style="width:100%;padding:8px;border-radius:8px;background:rgba(255,255,255,0.02);border:none;color:#e8f4ff"></textarea>
+        <label style="font-weight:700;display:block;margin-bottom:6px">Comments</label>
+        <textarea id="commentText" rows="3" style="width:100%;padding:8px;border-radius:8px;background:rgba(255,255,255,0.02);border:none;color:#e8f4ff" placeholder="Add a comment or observation..."></textarea>
         <div style="display:flex;gap:8px;margin-top:8px">
           <button id="postComment" class="btn small">Post comment</button>
-          <div class="muted" style="align-self:center">Comments saved locally</div>
+          <div class="muted" style="align-self:center">Comments are saved locally</div>
         </div>
-        <div id="commentsList" style="margin-top:8px"></div>
+        <div id="commentsList" style="margin-top:10px"></div>
       </div>
     </div>
   `;
-
-  // wire buttons
-  $('zoomBtn').onclick = ()=> map.setView([f.lat,f.lon], Math.max(4, map.getZoom()));
-  $('acceptBtn').onclick = ()=> acceptAnnotationFromFeature(f);
-  $('postComment').onclick = ()=> {
+  // wire
+  $('zoomBtn').onclick = () => map.setView([f.lat, f.lon], Math.max(4, map.getZoom()));
+  $('acceptBtn').onclick = () => acceptFeatureAsAnnotation(f);
+  $('postComment').onclick = () => {
     const txt = $('commentText').value.trim();
     if(!txt) { toast('Type a comment first'); return; }
     addCommentToFeature(f.id, txt);
@@ -294,339 +664,101 @@ function openFeature(id){
     renderCommentsForFeature(f.id);
   };
   renderCommentsForFeature(f.id);
+  // open popup on marker if exists
+  const m = markerMap[f.id];
+  if(m) { m.openPopup(); }
+  // highlight marker visually
+  highlightFeatureMarker(f.id);
 }
 
-/* Comments storage: stored per feature id in localStorage under LS_KEY_comments */
-function getCommentsStorageKey(){ return LS_KEY + '_comments'; }
-function loadComments(){ try { return JSON.parse(localStorage.getItem(getCommentsStorageKey())||'{}'); } catch(e){ return {}; } }
-function saveComments(obj){ localStorage.setItem(getCommentsStorageKey(), JSON.stringify(obj)); }
-function addCommentToFeature(fid, text){
-  const obj = loadComments();
-  obj[fid] = obj[fid] || [];
-  obj[fid].push({ text, ts: new Date().toISOString() });
-  saveComments(obj);
-  toast('Comment added (local only).');
-}
-function renderCommentsForFeature(fid){
-  const list = loadComments()[fid] || [];
-  const el = $('commentsList');
-  if(!el) return;
-  if(!list.length){ el.innerHTML = '<div class="muted">No comments yet</div>'; return; }
-  el.innerHTML = list.map(c => `<div style="padding:8px;border-radius:8px;background:rgba(255,255,255,0.01);margin-bottom:6px"><div style="font-size:13px">${escapeHtml(c.text)}</div><div class="muted" style="font-size:12px;margin-top:6px">${new Date(c.ts).toLocaleString()}</div></div>`).join('');
-}
-
-/* Suggestions handling */
-function showSuggestions(){
-  suggestionsLayer.clearLayers();
-  if(!window._SUGGESTIONS){
-    toast('No suggestions available.');
-    return;
-  }
-  const list = Array.isArray(window._SUGGESTIONS.suggestions) ? window._SUGGESTIONS.suggestions : (Array.isArray(window._SUGGESTIONS) ? window._SUGGESTIONS : []);
-  if(!list.length){ toast('Suggestions file empty.'); return; }
-  for(const s of list){
-    const m = L.circleMarker([s.lat, s.lon], { radius:12, color:'#ff7a00', weight:2, fillOpacity:0.35 });
-    m.bindPopup(`<b>${escapeHtml(s.name || s.id || 'candidate')}</b><br/>score: ${s.water_score===null?'N/A':Number(s.water_score).toFixed(3)}<br/><button class="accept-sugg btn small">Accept</button>`);
-    m.on('popupopen', e => {
-      setTimeout(()=> {
-        const el = e.popup.getElement();
-        if(!el) return;
-        const btn = el.querySelector('.accept-sugg');
-        if(btn) btn.onclick = ()=> {
-          acceptAnnotationFromSuggestion(s);
-          e.popup.remove();
-        };
-      }, 40);
-    });
-    suggestionsLayer.addLayer(m);
-  }
-  toast(`Showing ${list.length} suggestions. Accept to annotate.`);
-}
-
-/* Accept flows */
-function acceptAnnotationFromSuggestion(s){
-  const ann = {
-    id: s.id || `cand_${Date.now()}`,
-    name: s.name || s.id || 'candidate',
-    lat: +s.lat,
-    lon: +s.lon,
-    water_score: s.water_score===undefined?null:s.water_score,
-    source:'suggestion',
-    timestamp: new Date().toISOString(),
-    comments: []
-  };
-  addAnnotation(ann);
-}
-function acceptAnnotationFromFeature(f){
+function acceptFeatureAsAnnotation(f){
   const ann = {
     id: f.id,
     name: f.name,
     lat: f.lat,
     lon: f.lon,
-    water_score: f.water_score===undefined?null:f.water_score,
-    source:'feature',
+    water_score: f.water_score,
+    source: 'feature',
     timestamp: new Date().toISOString(),
-    comments: loadComments()[f.id] || []
+    comments: commentsStore.featureComments[f.id] ? [...commentsStore.featureComments[f.id]] : []
   };
   addAnnotation(ann);
 }
 
-/* Annotations management */
-function loadAnnotations(){
-  try { annotations = JSON.parse(localStorage.getItem(LS_KEY) || '[]'); } catch(e){ annotations = []; }
-}
-function saveAnnotations(){ localStorage.setItem(LS_KEY, JSON.stringify(annotations)); renderAnnotationsList(); }
-function addAnnotation(a){
-  if(annotations.find(x=> x.id === a.id)){ toast('Annotation already saved'); return; }
-  annotations.push(a); saveAnnotations(); toast('Annotation saved (local).'); renderAnnotationsList();
-}
-function deleteAnnotation(id){
-  annotations = annotations.filter(a=> a.id !== id); saveAnnotations(); toast('Annotation removed'); }
-
-/* Render annotation list */
-function renderAnnotationsList(){
-  const el = $('annotationsList');
-  if(!el) return;
-  if(!annotations.length){ el.innerHTML = '<div class="muted">None yet</div>'; return; }
-  el.innerHTML = annotations.map(a => {
-    return `<div>
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div>
-          <div style="font-weight:700">${escapeHtml(a.name)}</div>
-          <div class="muted" style="font-size:12px">${a.lat? a.lat.toFixed(4):''}, ${a.lon? a.lon.toFixed(4):''} • ${a.water_score===null?'N/A':Number(a.water_score).toFixed(3)}</div>
-        </div>
-        <div style="display:flex;gap:6px">
-          <button class="btn small" data-act="zoom" data-id="${escapeHtml(a.id)}">Zoom</button>
-          <button class="btn small ghost" data-act="del" data-id="${escapeHtml(a.id)}">Delete</button>
-        </div>
-      </div>
-    </div>`;
-  }).join('');
-  // wire buttons
-  el.querySelectorAll('button[data-act]').forEach(b=>{
-    const act = b.getAttribute('data-act'), id = b.getAttribute('data-id');
-    b.onclick = ()=> {
-      if(act==='zoom'){ const a = annotations.find(x=> x.id===id); if(a && a.lat && a.lon) map.setView([a.lat,a.lon], Math.max(4,map.getZoom())); }
-      if(act==='del'){ deleteAnnotation(id); }
-    };
-  });
+function highlightFeatureMarker(id){
+  // briefly change marker style
+  try {
+    Object.values(markerMap).forEach(m => m.setStyle({ weight:1.6 }));
+    const m = markerMap[id];
+    if(m) {
+      m.setStyle({ weight:3, fillOpacity:0.9 });
+      setTimeout(()=> { if(markerMap[id]) markerMap[id].setStyle({ weight:1.6, fillOpacity:0.72 }); }, 2500);
+    }
+  } catch(e){ /* ignore */ }
 }
 
-/* Export annotations as GeoJSON (includes comments) */
-function exportAnnotations(){
-  if(!annotations.length){ toast('No annotations to export.'); return; }
-  const features = annotations.map(a => ({
-    type:'Feature',
-    properties: { id: a.id, name:a.name, water_score: a.water_score, source: a.source, timestamp: a.timestamp, comments: a.comments||[] },
-    geometry: { type:'Point', coordinates: [a.lon, a.lat] }
-  }));
-  const fc = { type:'FeatureCollection', features };
-  const blob = new Blob([JSON.stringify(fc, null, 2)], { type:'application/geo+json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = 'annotations.geojson'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-  toast('Exported annotations.geojson');
-}
-
-/* Search */
+///// ----------------- Search & Permalink -----------------
 function doSearch(){
   const q = ($('searchInput') && $('searchInput').value || '').trim().toLowerCase();
-  if(!q){ toast('Enter crater name or id to search'); return; }
-  let found = featureIndex[q] || Object.values(featureIndex).find(f => f.name && f.name.toLowerCase().includes(q));
-  if(!found){ toast('No match'); return; }
-  openFeature(found.id);
-  map.setView([found.lat, found.lon], Math.max(4, map.getZoom()));
-  setPermalink(map, 'vis', found.id);
+  if(!q){ toast('Enter crater name or id'); return; }
+  let f = featureIndex[q] || Object.values(featureIndex).find(x => x.name && x.name.toLowerCase().includes(q));
+  if(!f){ toast('No match'); return; }
+  openFeature(f.id);
+  map.setView([f.lat, f.lon], Math.max(4, map.getZoom()));
+  setPermalink(f.id);
 }
 
-/* Compute PSR overlap using Turf if available, otherwise bbox fallback */
-function checkPSROverlapForFeature(f){
-  if(!PSR_GEOJSON) return false;
-  try {
-    if(window.turf && typeof window.turf.booleanPointInPolygon === 'function'){
-      const pt = turf.point([f.lon, f.lat]);
-      for(const feat of PSR_GEOJSON.features || []){
-        if(turf.booleanPointInPolygon(pt, feat)) return true;
-      }
-      return false;
-    } else {
-      // fallback: bounding box check (less accurate)
-      const ptlon = f.lon, ptlat = f.lat;
-      for(const feat of PSR_GEOJSON.features || []){
-        if(!feat.bbox && feat.geometry){
-          const coords = feat.geometry.coordinates.flat(Infinity);
-          // derive a bbox
-          const xs = [], ys = [];
-          const iter = (arr) => {
-            if(typeof arr[0] === 'number'){ xs.push(arr[0]); ys.push(arr[1]); return; }
-            for(const el of arr) iter(el);
-          };
-          iter(feat.geometry.coordinates);
-          const minx = Math.min(...xs), maxx=Math.max(...xs), miny=Math.min(...ys), maxy=Math.max(...ys);
-          if(ptlon >= minx && ptlon <= maxx && ptlat >= miny && ptlat <= maxy) return true;
-        } else if (feat.bbox) {
-          const [minx,miny,maxx,maxy] = feat.bbox;
-          if(ptlon >= minx && ptlon <= maxx && ptlat >= miny && ptlat <= maxy) return true;
-        }
-      }
-      return false;
-    }
-  } catch(e){
-    console.warn('PSR check failed:', e);
-    return false;
-  }
+function setPermalink(selectedId){
+  const c = map.getCenter();
+  const z = map.getZoom();
+  const parts = [z, c.lat.toFixed(6), c.lng.toFixed(6), 'vis', selectedId || ''];
+  location.hash = parts.join('/');
+}
+function readPermalink(){
+  if(!location.hash) return null;
+  const parts = location.hash.replace('#','').split('/');
+  if(parts.length < 4) return null;
+  return { z:+parts[0], lat:+parts[1], lon:+parts[2], layer:parts[3], selectedId: parts[4] || null };
 }
 
-/* Normalize & compute fallback water_score for features that lack it */
-function normalizeAndComputeScores(){
-  const arr = Object.values(featureIndex);
-  if(!arr.length) return;
-
-  // compute ranges for numeric components
-  const specVals = arr.map(f => f.spectral_mean).filter(v=>v!==null && v!==undefined);
-  const hydroVals = arr.map(f => f.hydrogen_mean).filter(v=>v!==null && v!==undefined);
-  const depthVals = arr.map(f => f.depth_metric).filter(v=>v!==null && v!==undefined);
-  const diamVals = arr.map(f => f.diameter_m).filter(v=>v!==null && v!==undefined);
-
-  const specMin = specVals.length?Math.min(...specVals):0, specMax = specVals.length?Math.max(...specVals):1;
-  const hydroMin = hydroVals.length?Math.min(...hydroVals):0, hydroMax = hydroVals.length?Math.max(...hydroVals):1;
-  const depthMin = depthVals.length?Math.min(...depthVals):0, depthMax = depthVals.length?Math.max(...depthVals):1;
-  const diamMin = diamVals.length?Math.min(...diamVals):0, diamMax = diamVals.length?Math.max(...diamVals):1;
-
-  for(const f of arr){
-    // ensure psr_overlap is accurate: recompute using PSR if data present and not already true
-    if(PSR_GEOJSON) {
-      try { f.psr_overlap = checkPSROverlapForFeature(f); } catch(e){ /* ignore */ }
-    }
-
-    if(f.water_score === null || f.water_score === undefined){
-      // compute component scores with available components
-      const components = [];
-      // psr
-      components.push({k:'psr', avail:true, val: f.psr_overlap?1:0, w:0.4});
-      // spectral
-      if(f.spectral_mean !== null && f.spectral_mean !== undefined){
-        const v = (f.spectral_mean - specMin) / (specMax - specMin + 1e-12);
-        components.push({k:'spec', avail:true, val:v, w:0.35});
-      } else { components.push({k:'spec', avail:false, val:0, w:0.35}); }
-      // hydrogen
-      if(f.hydrogen_mean !== null && f.hydrogen_mean !== undefined){
-        const v = (f.hydrogen_mean - hydroMin) / (hydroMax - hydroMin + 1e-12);
-        components.push({k:'hydro', avail:true, val:v, w:0.2});
-      } else { components.push({k:'hydro', avail:false, val:0, w:0.2}); }
-      // depth
-      if(f.depth_metric !== null && f.depth_metric !== undefined){
-        const v = (f.depth_metric - depthMin) / (depthMax - depthMin + 1e-12);
-        components.push({k:'depth', avail:true, val:v, w:0.05});
-      } else { components.push({k:'depth', avail:false, val:0, w:0.05}); }
-
-      // Rebalance weights to only available comps (psr always avail)
-      let totalW = 0;
-      components.forEach(c => { if(c.avail || c.k==='psr') totalW += c.w; else c.w = 0; });
-      if(totalW <= 0) { f.water_score = null; continue; }
-      components.forEach(c => c.w = c.w / totalW);
-
-      const score = components.reduce((s,c) => s + (c.val * c.w), 0);
-      f.water_score = Number(score.toFixed(4));
-
-      // update marker color if exists
-      const layer = featureLayerMap[f.id];
-      if(layer) layer.setStyle({ color: scoreToColor(f.water_score) });
-    }
-  }
-}
-
-/* Wire UI controls */
+///// ----------------- UI wiring -----------------
 function wireUI(){
-  const si = $('searchInput'), sb = $('searchBtn'), sug = $('suggestBtn'), exp = $('exportBtn'), help = $('helpBtn');
-  if(sb) sb.onclick = doSearch;
-  if(si) si.addEventListener('keydown', (e)=> { if(e.key==='Enter') doSearch(); });
-  if(sug) sug.onclick = showSuggestions;
-  if(exp) exp.onclick = exportAnnotations;
-  if(help) help.onclick = ()=> {
-    alert('Tips:\\n- Click a crater to view details.\\n- Use Suggest to show precomputed candidates.\\n- Accept to annotate.\\n- Export saves all local annotations as GeoJSON.');
-  };
+  // topbar buttons
+  const searchBtn = $('searchBtn');
+  if(searchBtn) searchBtn.onclick = doSearch;
+  const suggestBtn = $('suggestBtn');
+  if(suggestBtn) suggestBtn.onclick = showSuggestions;
+  const exportBtn = $('exportBtn');
+  if(exportBtn) exportBtn.onclick = exportAnnotations;
 
-  // layer toggles (we only have vis tiles now)
+  // search enter
+  const sI = $('searchInput');
+  if(sI) sI.addEventListener('keydown', e => { if(e.key === 'Enter') doSearch(); });
+
+  // layer radios (we only have vis tiles now)
   document.querySelectorAll('input[name="layer"]').forEach(r => r.addEventListener('change', e => {
     const v = e.target.value;
-    if(v !== 'vis') {
-      toast('Layer not available. Add tiles for that layer to enable.');
-      // reset to vis
-      const visRadio = document.querySelector('input[name="layer"][value="vis"]');
-      if(visRadio) visRadio.checked = true;
-      return;
-    }
+    if(v !== 'vis'){ toast('Layer not available — add tiles for IR/Elevation/Index to enable.'); const visRadio = document.querySelector('input[name="layer"][value="vis"]'); if(visRadio) visRadio.checked = true; }
   }));
 
-  // update permalink on moveend (debounced)
-  let timer = null;
-  map.on('moveend', ()=> {
-    if(timer) clearTimeout(timer);
-    timer = setTimeout(()=> setPermalink(map, 'vis', null), 400);
-  });
+  // open permalink selected feature if present
+  const pl = readPermalink();
+  if(pl && pl.selectedId) {
+    setTimeout(()=> {
+      if(featureIndex[pl.selectedId]) openFeature(pl.selectedId);
+    }, 700);
+  }
 }
 
-/* Export annotations helper reused above */
-function exportAnnotations(){ /* defined earlier inside file scope? ensure wrapper available */
-  // Use the same implementation as add/export above
-  if(!annotations.length){ toast('No annotations to export.'); return; }
-  const features = annotations.map(a => ({
-    type:'Feature',
-    properties: { id: a.id, name:a.name, water_score: a.water_score, source:a.source, timestamp:a.timestamp, comments: a.comments || [] },
-    geometry: { type:'Point', coordinates:[a.lon, a.lat] }
-  }));
-  const fc = { type:'FeatureCollection', features };
-  const blob = new Blob([JSON.stringify(fc, null, 2)], { type:'application/geo+json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = 'annotations.geojson'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-  toast('Exported annotations.geojson');
+///// ----------------- Misc helpers -----------------
+function scoreToColor(s){
+  if(s === null || s === undefined || isNaN(s)) return '#7f8c8d';
+  const v = Math.max(0, Math.min(1, +s));
+  const r = Math.round(255 * Math.min(1, Math.max(0, (v - 0.5) * 2)));
+  const b = Math.round(255 * Math.min(1, Math.max(0, (0.5 - v) * 2)));
+  const g = Math.round(255 * (1 - Math.abs(v - 0.5) * 2));
+  return `rgb(${r},${g},${b})`;
 }
+function formatScore(s){ return (s === null || s === undefined) ? '—' : Number(s).toFixed(3); }
 
-/* addAnnotation, deleteAnnotation, renderAnnotationsList defined earlier in file — ensure they exist */
-function addAnnotation(a){
-  if(annotations.find(x=> x.id === a.id)){ toast('Annotation already exists'); return; }
-  annotations.push(a); localStorage.setItem(LS_KEY, JSON.stringify(annotations)); renderAnnotationsList(); toast('Annotation saved');
-}
-function deleteAnnotation(id){ annotations = annotations.filter(x=> x.id !== id); localStorage.setItem(LS_KEY, JSON.stringify(annotations)); renderAnnotationsList(); }
-function renderAnnotationsList(){
-  const el = $('annotationsList');
-  if(!el) return;
-  if(!annotations.length){ el.innerHTML = '<div class="muted">None yet</div>'; return; }
-  el.innerHTML = annotations.map(a => {
-    return `<div>
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div><div style="font-weight:700">${escapeHtml(a.name)}</div><div class="muted" style="font-size:12px">${a.lat? a.lat.toFixed(4):''}, ${a.lon? a.lon.toFixed(4):''} • ${a.water_score===null?'N/A':Number(a.water_score).toFixed(3)}</div></div>
-        <div style="display:flex;gap:6px">
-          <button class="btn small" data-act="zoom" data-id="${escapeHtml(a.id)}">Zoom</button>
-          <button class="btn small ghost" data-act="del" data-id="${escapeHtml(a.id)}">Delete</button>
-        </div>
-      </div>
-    </div>`;
-  }).join('');
-  el.querySelectorAll('button[data-act]').forEach(b=>{
-    const act = b.getAttribute('data-act'), id = b.getAttribute('data-id');
-    b.onclick = ()=> { if(act==='zoom'){ const a = annotations.find(x=> x.id===id); if(a && a.lat && a.lon) map.setView([a.lat,a.lon], Math.max(4,map.getZoom())); } if(act==='del'){ deleteAnnotation(id); } };
-  });
-}
-
-/* helper escape */
-function escapeHtml(s){ if(!s && s!==0) return ''; return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
-
-/* Search implementation */
-function doSearch(){
-  const q = ($('searchInput') && $('searchInput').value || '').trim().toLowerCase();
-  if(!q){ toast('Type a crater name or id'); return; }
-  let found = featureIndex[q] || Object.values(featureIndex).find(f => f.name && f.name.toLowerCase().includes(q));
-  if(!found){ toast('No match'); return; }
-  openFeature(found.id);
-  map.setView([found.lat, found.lon], Math.max(4, map.getZoom()));
-  setPermalink(map, 'vis', found.id);
-}
-
-/* Init sequence */
-document.addEventListener('DOMContentLoaded', async ()=>{
-  // load annotations from storage
-  try { annotations = JSON.parse(localStorage.getItem(LS_KEY) || '[]'); } catch(e){ annotations = []; }
-  await init();
-  renderAnnotationsList();
-});
+///// End of app.js
